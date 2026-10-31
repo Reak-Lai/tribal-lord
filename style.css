@@ -1,0 +1,135 @@
+/* 部落領主 demo v1a 像素風
+   180×320 邏輯像素；--s = 整數放大倍數（由 game.js 設定）；所有顏色只用 Endesga 32。
+   位置寫成 --x / --y / --w / --h（邏輯像素），實際 = 邏輯 × --s。 */
+:root { --s: 2px; }
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; background: #181425; }
+body {
+  margin: 0; background: #181425; color: #ffffff;
+  font-family: TribePixel, monospace; font-size: calc(12 * var(--s)); line-height: calc(13 * var(--s));
+  -webkit-font-smoothing: none; -moz-osx-font-smoothing: grayscale; font-smooth: never;
+  font-synthesis: none; text-rendering: optimizeSpeed;
+  overflow-x: hidden; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+b, i { font-weight: normal; font-style: normal; }
+#app { position: relative; width: calc(180 * var(--s)); height: calc(320 * var(--s)); margin: 0 auto; overflow: hidden; background: #181425; }
+.ab { position: absolute; left: calc(var(--x, 0) * var(--s)); top: calc(var(--y, 0) * var(--s)); }
+[hidden] { display: none !important; }
+.t { white-space: nowrap; font-size: calc(12 * var(--s)); line-height: calc(13 * var(--s)); }
+.wrap { white-space: normal; overflow-wrap: anywhere; }
+.ra { transform: translateX(-100%); }
+.dim { color: #8b9bb4; }
+.warn { color: #f77622; }
+.pos { color: #63c74d; } .neg { color: #e43b44; }
+.hi { color: #fee761; }
+.male { color: #0099db; } .female { color: #f6757a; }
+.tal { color: #feae34; }
+.off { color: #5a6988; }
+canvas, .ic, .st { image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges; image-rendering: pixelated; }
+
+/* 頂列 y 0–39 */
+#topbar { --x: 0; --y: 0; width: calc(180 * var(--s)); height: calc(40 * var(--s)); background: #181425; }
+.lordbtn { width: calc(36 * var(--s)); height: calc(36 * var(--s)); padding: 0; }
+.avatar { display: block; width: 100%; height: 100%; }
+.res { width: calc(46 * var(--s)); height: calc(18 * var(--s)); text-align: left; }
+.res .num { --x: 12; --y: 3; }
+.ic {
+  display: block; width: calc(var(--w, 8) * var(--s)); height: calc(var(--h, 8) * var(--s));
+  background-image: var(--atlas); background-repeat: no-repeat;
+  background-size: calc(120 * var(--s)) calc(47 * var(--s));
+  background-position: calc(var(--sx) * var(--s) * -1) calc(var(--sy) * var(--s) * -1);
+}
+.ic.mineral { background: var(--ic-mineral) 0 0 / 100% 100% no-repeat; }
+.timebox { width: calc(42 * var(--s)); height: calc(37 * var(--s)); background: #262b44; }
+.timebox .t { width: calc(42 * var(--s)); text-align: center; color: #c0cbdc; }
+.arc { width: calc(42 * var(--s)); height: calc(37 * var(--s)); pointer-events: none; }
+
+/* 地圖視窗 (0,40,180,250)：只有這裡關掉瀏覽器的觸控捲動 */
+#map { display: block; width: calc(180 * var(--s)); height: calc(250 * var(--s)); touch-action: none; background: #c0cbdc; cursor: grab; }
+#map[data-dragging] { cursor: grabbing; }
+#mapLabels { width: calc(180 * var(--s)); height: calc(250 * var(--s)); overflow: hidden; pointer-events: none; }
+.cnt { transform: translateX(-100%); }
+
+/* 底列 y 290–319 */
+#bottombar { --x: 0; --y: 290; width: calc(180 * var(--s)); height: calc(30 * var(--s)); background: #181425; box-shadow: inset 0 var(--s) 0 0 #3a4466; }
+
+/* 按鈕：1 邏輯 px 實色亮邊（上/左）與暗邊（下/右），無圓角、無模糊 */
+button.px {
+  margin: 0; padding: 0; border: 0; border-radius: 0; outline: none; -webkit-appearance: none; appearance: none;
+  width: calc(var(--w) * var(--s)); height: calc(var(--h) * var(--s));
+  font: inherit; color: #ffffff; background: #3a4466;
+  box-shadow: inset calc(-1 * var(--s)) calc(-1 * var(--s)) 0 0 #262b44, inset var(--s) var(--s) 0 0 #5a6988;
+  cursor: pointer; touch-action: manipulation; -webkit-touch-callout: none;
+}
+button.px > .t { color: inherit; }
+button.px:active:not(:disabled) { transform: translateY(var(--s)); }
+button.px:disabled { background: #262b44; color: #5a6988; box-shadow: inset calc(-1 * var(--s)) calc(-1 * var(--s)) 0 0 #181425, inset var(--s) var(--s) 0 0 #262b44; cursor: default; }
+button.px:focus { outline: none; }
+button.px:focus-visible { box-shadow: inset 0 0 0 var(--s) #fee761; }
+button.res .t { color: #ffffff; }
+button.tab { background: #262b44; color: #8b9bb4; }
+button.tab.on { background: #5a6988; color: #ffffff; }
+
+.outline {
+  color: #ffffff;
+  text-shadow:
+    calc(-1 * var(--s)) 0 0 #181425, var(--s) 0 0 #181425, 0 calc(-1 * var(--s)) 0 #181425, 0 var(--s) 0 #181425,
+    calc(-1 * var(--s)) calc(-1 * var(--s)) 0 #181425, var(--s) var(--s) 0 #181425, calc(-1 * var(--s)) var(--s) 0 #181425, var(--s) calc(-1 * var(--s)) 0 #181425;
+}
+
+/* 星星：7×7 像素圖，間距 8 邏輯 px；白星 = 現值、黑星 = 潛力 */
+.stars { display: inline-block; white-space: nowrap; height: calc(7 * var(--s)); vertical-align: top; }
+.st { display: inline-block; width: calc(7 * var(--s)); height: calc(7 * var(--s)); margin-right: var(--s); background: none 0 0 / 100% 100% no-repeat; vertical-align: top; }
+.st.w { background-image: var(--star-w); }
+.st.b { background-image: var(--star-b); }
+.at { white-space: nowrap; }
+.at .ak { display: inline-block; width: calc(14 * var(--s)); color: #c0cbdc; font-size: calc(12 * var(--s)); line-height: calc(13 * var(--s)); vertical-align: top; }
+.at .stars { margin-top: calc(3 * var(--s)); }
+
+/* 流式排版的列（高度用邏輯 px）*/
+.ln, .card, .rr, .roster, .pbody, .phead { --x: 0; --y: 0; }
+.ln { position: relative; height: calc(var(--h, 14) * var(--s)); }
+.ln.hd { color: #fee761; }
+.ln.sep { box-shadow: inset 0 calc(-1 * var(--s)) 0 0 #3a4466; }
+.ln.wrap { height: auto; min-height: calc(var(--h, 14) * var(--s)); }
+.ln.wrap > .t { position: relative; left: auto; top: auto; display: block; padding: 0 calc(4 * var(--s)); white-space: normal; }
+
+/* 彈窗 x8 y44 w164，最高 236；遮罩用 2×2 棋盤格（只用調色盤色）*/
+#mask { --x: 0; --y: 0; width: calc(180 * var(--s)); height: calc(320 * var(--s)); background: var(--dither) 0 0 / calc(2 * var(--s)) calc(2 * var(--s)) repeat; image-rendering: pixelated; z-index: 4; }
+#popup { --x: 8; --y: 44; width: calc(164 * var(--s)); max-height: calc(236 * var(--s)); overflow-y: auto; overscroll-behavior: contain; background: #262b44; box-shadow: inset 0 0 0 var(--s) #8b9bb4; z-index: 5; padding-bottom: calc(4 * var(--s)); }
+.phead { position: relative; height: calc(17 * var(--s)); background: #3a4466; margin: var(--s); }
+.ptitle { --y: 1; color: #fee761; }
+.pbody { position: relative; padding-top: calc(2 * var(--s)); }
+.brow { box-shadow: inset 0 calc(-1 * var(--s)) 0 0 #3a4466; }
+.bic { width: calc(16 * var(--s)); height: calc(16 * var(--s)); }
+
+/* 全螢幕頁（內政／軍營）*/
+#page { --x: 0; --y: 0; width: calc(180 * var(--s)); height: calc(320 * var(--s)); background: #181425; z-index: 3; }
+.ptitle2 { color: #fee761; }
+.pagebody { width: calc(180 * var(--s)); height: calc(var(--h) * var(--s)); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding-bottom: calc(8 * var(--s)); box-shadow: inset 0 var(--s) 0 0 #3a4466; }
+.jrow { box-shadow: inset 0 calc(-1 * var(--s)) 0 0 #262b44; }
+.ctr { text-align: center; width: calc(22 * var(--s)); }
+.sel {
+  width: calc(var(--w) * var(--s)); height: calc(var(--h) * var(--s)); margin: 0; padding: 0 calc(2 * var(--s)); border: 0; border-radius: 0;
+  font: inherit; font-size: calc(12 * var(--s)); color: #ffffff; background: #3a4466; -webkit-appearance: none; appearance: none;
+  box-shadow: inset calc(-1 * var(--s)) calc(-1 * var(--s)) 0 0 #262b44, inset var(--s) var(--s) 0 0 #5a6988;
+}
+.roster { position: relative; }
+.rr { cursor: pointer; box-shadow: inset 0 calc(-1 * var(--s)) 0 0 #262b44; }
+.rr.open { background: #262b44; }
+.card { margin: calc(2 * var(--s)); padding-bottom: calc(3 * var(--s)); background: #262b44; box-shadow: inset 0 0 0 var(--s) #3a4466; }
+.card .eff { padding: 0 calc(4 * var(--s)); }
+.talentlist { padding: 0 calc(14 * var(--s)); }
+.brk { box-shadow: inset 0 calc(-1 * var(--s)) 0 0 #262b44; }
+.lock { color: #f77622; }
+
+/* 領主分配（新遊戲第一個畫面）*/
+#lordSetup { --x: 0; --y: 0; width: calc(180 * var(--s)); height: calc(320 * var(--s)); background: #181425; z-index: 6; }
+#loadNotice { width: calc(172 * var(--s)); }
+
+/* 320 邏輯 px 外框以下：存檔狀態、新遊戲、版本、字型授權（捲動才看得到） */
+#footer { width: calc(180 * var(--s)); margin: 0 auto; padding: calc(4 * var(--s)) calc(4 * var(--s)) calc(8 * var(--s)); background: #181425; color: #8b9bb4; overflow-wrap: anywhere; }
+#footer .warn { color: #e43b44; }
+#footer .warn:empty { display: none; }
+#footNew { position: relative; display: block; --w: 64; --h: 22; margin: calc(4 * var(--s)) 0; text-align: center; }
+#credit { color: #5a6988; }
