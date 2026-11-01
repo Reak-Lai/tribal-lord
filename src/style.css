@@ -1,0 +1,166 @@
+/* 部落領主 demo v2-land.22　橫式 UI（ui-landscape-v2.md）
+   設計單位 du：stage = DW×720 du；--u = 每 du 幾 CSS px（由 game.js 設定，不做整數倍）；--dw = 設計寬 DW（1280–1600）。
+   位置一律由 game.js 寫成 calc(N * var(--u))，不靠 CSS 變數繼承。字級：max(CSS 下限, N du)。
+   佔位美術：色塊＋文字標籤（§10.2）。
+   字型（v2-land.12，計畫第 6 步）：芫荽 Iansui Regular 子集（SIL OFL 1.1，授權全文見 font/OFL.txt，單檔裡也附在下面的註解）。
+   只有 Regular 一種粗細：全部 font-weight: normal、font-synthesis: none，不做假粗體。單檔版 build-single.js 把下面 @font-face 的字型網址換成 data URL。 */
+@font-face { font-family: "Iansui"; src: url("font/iansui-sub.woff2") format("woff2"); font-weight: normal; font-style: normal; font-display: block; }
+:root { --u: 0.5px; --dw: 1280; --side: #4a3426; --side2: #5c412f; --line: #2e1f15; --parch: #f4e7c9; --parch2: #e9d6ad; --ink: #3a2616; --dimink: #8a7458; --fire: #e8742a; --leaf: #5aa04a; --red: #d23b2f; }
+*, *::before, *::after { box-sizing: border-box; }
+html { font-synthesis: none; -webkit-font-synthesis: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; background: var(--side); height: 100%; }
+body {
+  margin: 0; position: fixed; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; overscroll-behavior: none;
+  background: var(--side); color: var(--ink);
+  font-family: "Iansui", "PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", "Microsoft JhengHei", sans-serif;
+  font-size: max(14px, calc(28 * var(--u))); line-height: 1.3;
+  -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+}
+[hidden] { display: none !important; }
+#app { position: absolute; overflow: hidden; background: var(--side); }
+.ab { position: absolute; }
+b, strong, th, h1, h2, h3, h4, h5, h6, optgroup { font-weight: normal; }   /* v2-land.12：字型只有 Regular，不要粗體 */
+/* 字級（§2.2）*/
+.f40 { font-size: max(18px, calc(40 * var(--u))); font-weight: normal; }
+.f36 { font-size: max(14px, calc(36 * var(--u))); font-weight: normal; }
+.f32 { font-size: max(14px, calc(32 * var(--u))); }
+.f30 { font-size: max(14px, calc(30 * var(--u))); font-weight: normal; }
+.f28 { font-size: max(14px, calc(28 * var(--u))); }
+.f24 { font-size: max(12px, calc(24 * var(--u))); }
+.bold { font-weight: normal; }
+.t { white-space: nowrap; display: flex; align-items: center; top: 0; height: 100%; }
+.ra { transform: translateX(-100%); }
+.ca { transform: translateX(-50%); }
+.dim { color: var(--dimink); }
+.pos { color: #2f7a2a; } .neg { color: var(--red); } .warn { color: #c0561a; }
+.hi { color: var(--red); font-weight: normal; }
+.male { color: #2a6fb0; } .female { color: #c2456a; }
+.tal { color: #a8620e; }
+.off { color: #a89a86; }
+.wrap { white-space: normal; overflow-wrap: anywhere; }
+
+/* 按鈕 */
+button { font: inherit; color: inherit; margin: 0; padding: 0; border: 0; background: none; -webkit-appearance: none; appearance: none;
+  touch-action: manipulation; cursor: pointer; -webkit-touch-callout: none; outline: none; }
+button:disabled { cursor: default; }
+.btn { display: flex; align-items: center; justify-content: center; white-space: nowrap;
+  border-radius: calc(24 * var(--u)); background: var(--parch2); color: var(--ink);
+  border: calc(3 * var(--u)) solid #6b4a2e; box-shadow: 0 calc(5 * var(--u)) 0 #6b4a2e; }
+.btn:active:not(:disabled) { transform: translateY(calc(3 * var(--u))); box-shadow: 0 calc(2 * var(--u)) 0 #6b4a2e; }
+.btn.primary { background: var(--leaf); color: #fff; border-color: #2f5e25; box-shadow: 0 calc(5 * var(--u)) 0 #2f5e25; font-weight: normal; }
+.btn:disabled, .btn.off { background: #d8cfbd; color: #9a8d78; border-color: #a99d88; box-shadow: none; }
+.btn.tab { border-radius: 0; box-shadow: none; border: 0; border-bottom: calc(4 * var(--u)) solid #b9a27c; background: #e3d1aa; color: var(--dimink); }
+.btn.tab.on { background: var(--parch); color: var(--ink); font-weight: normal; border-bottom-color: var(--fire); }
+.btn.sexbtn.on { background: var(--fire); color: #fff; border-color: #8a3f10; font-weight: normal; }
+
+/* 左欄 */
+.cell { background: var(--side); color: #fff3dc; text-align: left; border-bottom: calc(3 * var(--u)) solid var(--line); }
+.cell:active { background: var(--side2); }
+.avatar { border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff;
+  font-size: max(28px, calc(72 * var(--u))); font-weight: normal; border: calc(5 * var(--u)) solid #f4e7c9; box-shadow: 0 calc(4 * var(--u)) 0 var(--line); }
+.avatar.M { background: #3c7fc0; } .avatar.F { background: #d0617f; } .avatar.N { background: #8a7a68; }
+.icon { border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: normal;
+  border: calc(3 * var(--u)) solid rgba(0,0,0,.35); }
+.num { font-weight: normal; color: #fff; -webkit-text-stroke: 0; paint-order: stroke fill;
+  text-shadow: calc(-2 * var(--u)) 0 0 var(--line), calc(2 * var(--u)) 0 0 var(--line), 0 calc(-2 * var(--u)) 0 var(--line), 0 calc(2 * var(--u)) 0 var(--line), calc(2 * var(--u)) calc(2 * var(--u)) 0 var(--line); }
+#goal.alldone { cursor: default; }
+/* v2-land.13（計畫第 7 步；art-v2-decisions 第 8 項、art-direction-v2 §6）：目標格整格用標題帶色 #BBA77E 當底，木牌 #AB8E5A 只做 8 du 外框（inset 陰影，不佔版面、內容位置不動）；字用主字 #2D2E25 */
+#goal { background: #BBA77E; color: #2D2E25; box-shadow: inset 0 0 0 calc(8 * var(--u)) #AB8E5A; }
+#goal:active { background: #BBA77E; }
+/* v2-land.15（企劃回覆 1、4、5）：上下 12 du 木條（左右凸出 4、兩端半圓）；按下亮度 ×0.9；全部完成「✓ 全部完成」同樣主字色，✓ 用 CSS 畫 */
+#goal { overflow: visible; }
+#goal .goalroll { background: #AB8E5A; border-radius: calc(6 * var(--u)); pointer-events: none; }
+#goal.press:not(.alldone), #goal:not(.alldone):active { filter: brightness(.9); }
+#goal.alldone #goalName { color: #2D2E25; }
+#goalName.chk::before { content: ''; display: inline-block; width: .32em; height: .62em; margin: 0 .42em 0 .14em; vertical-align: .08em;
+  border: solid #2D2E25; border-width: 0 .12em .12em 0; transform: rotate(45deg); }
+#goal .glabel { color: #2D2E25; }
+.goaldot { border-radius: 50%; background: var(--red); border: calc(3 * var(--u)) solid #fff3dc; }
+.bar { border-radius: calc(9 * var(--u)); background: #2e1f15; border: calc(2 * var(--u)) solid #f4e7c9; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--leaf); }
+
+/* 右欄 */
+.sidebtn { background: var(--side); }
+.sidebtn .frame { border-radius: calc(22 * var(--u)); background: var(--parch); border: calc(3 * var(--u)) solid #6b4a2e; box-shadow: 0 calc(5 * var(--u)) 0 var(--line); }
+.sidebtn:active:not(:disabled) .frame { transform: translateY(calc(3 * var(--u))); }
+.sidebtn:disabled .frame { background: #8c7b69; border-color: #5d4c3c; }
+.sidebtn:disabled { color: #4e3f31; }
+.sidebtn:disabled .icon { filter: grayscale(1); opacity: .6; }
+.badge { border-radius: 50%; background: var(--red); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: normal;
+  border: calc(3 * var(--u)) solid #fff3dc; white-space: nowrap; }
+.timecell { color: #fff3dc; border-bottom: calc(3 * var(--u)) solid var(--line); }
+
+/* 地圖 */
+#map { display: block; touch-action: none; cursor: grab; background: #8fbf6a; }
+#map[data-dragging] { cursor: grabbing; }
+#mapMask { background: rgba(0, 0, 0, .25); }
+
+/* 內政／軍營面板（右側滑出）*/
+#page { background: var(--parch); border-radius: calc(20 * var(--u)) 0 0 calc(20 * var(--u)); box-shadow: calc(-10 * var(--u)) 0 calc(24 * var(--u)) rgba(0,0,0,.35); overflow: hidden; }
+#page.slide { animation: slidein .18s ease-out; }
+/* v2-land.13（art-v2-decisions 第 7 項）：卷軸邊（佔位樣式：木牌色 #AB8E5A 純色條）。純裝飾，不吃點擊（pointer-events: none），面板和彈窗的內容區不變。
+   內政／軍營面板：左緣外 16 du 直卷軸，蓋在露出的地圖上，跟著面板滑入；彈窗：上下各 24 du，貼在彈窗外面 */
+.scrolledge { background: #AB8E5A; }   /* v2-land.15：吃點擊，點了沒反應（企劃回覆第 3 項） */
+.popedge { border-radius: calc(12 * var(--u)); }   /* v2-land.15：兩端半圓（企劃回覆第 2 項） */
+#pageEdge { z-index: 7; }
+#pageEdge.slide { animation: edgein .18s ease-out; }
+@keyframes edgein { from { transform: translateX(calc(720 * var(--u))); } to { transform: none; } }
+.popedge { z-index: 21; }
+@keyframes slidein { from { transform: translateX(100%); } to { transform: none; } }
+.phead { background: var(--parch2); border-bottom: calc(3 * var(--u)) solid #b9a27c; }
+.xbtn { display: flex; align-items: center; justify-content: center; font-size: max(20px, calc(48 * var(--u))); line-height: 1; color: var(--ink); }
+.xbtn:active { background: rgba(0,0,0,.08); }
+/* v2-land.8：關閉鈕的叉叉用程式畫（兩條圓頭線，顏色＝按鈕文字色），不用文字叉號（U+2715）；點擊範圍照舊 96×96 du */
+.xbtn::before, .xbtn::after { content: ''; position: absolute; left: 50%; top: 50%; width: calc(44 * var(--u)); height: max(2px, calc(6 * var(--u))); border-radius: calc(3 * var(--u)); background: currentColor; }
+.xbtn::before { transform: translate(-50%, -50%) rotate(45deg); }
+.xbtn::after { transform: translate(-50%, -50%) rotate(-45deg); }
+.popcell { background: #fffaf0; border: calc(2 * var(--u)) solid #c9b48c; border-radius: calc(14 * var(--u)); }
+.scroll { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+.ln { position: relative; flex: none; }
+.ln.hd { color: #a8471a; font-weight: normal; }
+.ln.sep { border-bottom: calc(2 * var(--u)) solid #d9c49c; }
+.jrow { background: #fffaf0; border: calc(2 * var(--u)) solid #c9b48c; border-radius: calc(14 * var(--u)); }
+.jrow.dim { background: #efe6d3; }
+.jrow.flash { animation: flash .35s 3 alternate; }
+@keyframes flash { from { background: #fffaf0; } to { background: #ffc46b; } }
+.jbtn { font-size: max(20px, calc(44 * var(--u))); font-weight: normal; border-radius: calc(18 * var(--u)); }
+.sel { margin: 0; padding: 0 calc(16 * var(--u)); border-radius: calc(16 * var(--u)); border: calc(3 * var(--u)) solid #6b4a2e;
+  background: var(--parch2); color: var(--ink); font: inherit; font-size: max(14px, calc(28 * var(--u))); -webkit-appearance: none; appearance: none; }
+.rr { cursor: pointer; border-bottom: calc(2 * var(--u)) solid #d9c49c; }
+.rr.open { background: #efe2c4; }
+.card { background: #fffaf0; border: calc(2 * var(--u)) solid #c9b48c; border-radius: calc(14 * var(--u)); }
+.stars { display: inline-flex; white-space: nowrap; }
+.stars i { font-style: normal; display: inline-block; width: 1.05em; text-align: center; }
+.stars .w { color: #d99a00; } .stars .b { color: #a89a86; } .stars .e { color: transparent; }
+.lock { color: #c0561a; }
+
+/* 彈窗（§5）：遮罩 50% 黑，蓋整個畫面（含左右欄、補邊區）*/
+#mask { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, .5); z-index: 20; }
+#popup { background: var(--parch); border-radius: 0;   /* v2-land.17：四角改直角，圓角交給卷軸邊的半圓頭 */  border: calc(4 * var(--u)) solid #6b4a2e; box-shadow: 0 calc(10 * var(--u)) calc(30 * var(--u)) rgba(0,0,0,.45); overflow: hidden; z-index: 21; }
+#popup .phead { background: #c9894a; color: #fff; border-bottom-color: #8a5a2c; }
+#popup .xbtn { color: #fff; }
+.pfoot { display: flex; justify-content: center; }
+.bigmsg { display: flex; align-items: center; justify-content: center; text-align: center; }
+
+/* 領主分配（全畫面）*/
+#lordSetup { background: #f1e2c1; z-index: 30; }
+#lordSetup .half { border-right: calc(3 * var(--u)) solid #c9b48c; }
+
+/* 請轉橫向（§8，用 CSS px）*/
+#rotate { position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 100; background: #463a32; color: #fff;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; }
+#otherTab { position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 101; background: #463a32; color: #fff;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; }
+#otherTab .m1 { font-size: 20px; font-weight: normal; }
+#rotate svg { width: 100px; height: 170px; display: block; }
+#rotate .m1 { font-size: 20px; font-weight: normal; margin-top: 40px; }
+#rotate .m2 { font-size: 14px; margin-top: 12px; opacity: .85; }
+
+/* 錯誤、存檔提示（平常是空的，不佔畫面）*/
+#notes { position: fixed; left: 50%; top: 4px; transform: translateX(-50%); z-index: 90; max-width: 90vw; pointer-events: none; font-size: 12px; }
+#notes div { background: #fff3dc; color: #b3261e; padding: 2px 6px; border-radius: 4px; margin-top: 2px; }
+#notes div:empty { display: none; }
+/* v2-land.18：匯出／匯入存檔的文字框（可以選取、可以貼上） */
+.savecode { display: block; width: 100%; box-sizing: border-box; resize: none; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: max(16px, calc(20 * var(--u))); line-height: 1.3;   /* 16px 以上：iOS 點文字框時不會自動放大 */
+  padding: calc(12 * var(--u)); border: calc(2 * var(--u)) solid #c9b48c; border-radius: calc(14 * var(--u)); background: #fffaf0; color: var(--ink);
+  -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; word-break: break-all; }
+.err { color: #b3261e; }

@@ -3,28 +3,31 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>部落領主 demo v1a.1</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>部落領主 demo v2-land.22（橫式）</title>
 <link rel="stylesheet" href="style.css">
 <script src="assets.js"></script>
 </head>
 <body>
 <div id="app">
-  <div id="topbar" class="ab"></div>
   <canvas id="map" class="ab"></canvas>
-  <div id="mapLabels" class="ab"></div>
-  <div id="bottombar" class="ab"></div>
+  <div id="mapMask" class="ab" hidden></div>
   <div id="page" class="ab" hidden></div>
-  <div id="mask" class="ab" hidden></div>
+  <div id="left" class="ab"></div>
+  <div id="right" class="ab"></div>
+  <div id="mask" hidden></div>
   <div id="popup" class="ab" hidden></div>
   <div id="lordSetup" class="ab" hidden></div>
 </div>
-<div id="footer">
-  <div id="saveNote" class="warn"></div>
-  <div id="error" class="warn"></div>
-  <button id="footNew" class="px">新遊戲</button>
-  <div id="version" class="version"></div>
-  <div id="credit">字型：俐方體11號（Cubic 11，ACh-K）子集，改名 TribePixel，SIL OFL 1.1 授權</div>
+<div id="rotate" hidden>
+  <svg viewBox="0 0 100 170" aria-hidden="true"><rect x="20" y="20" width="60" height="100" rx="8" fill="none" stroke="#fff" stroke-width="3"/>
+    <path d="M10 70 A45 45 0 0 1 32 22" fill="none" stroke="#fff" stroke-width="3"/><path d="M90 92 A45 45 0 0 1 68 140" fill="none" stroke="#fff" stroke-width="3"/></svg>
+  <div class="m1">請將手機轉為橫向</div>
+  <div class="m2">遊戲已暫停</div>
 </div>
+<div id="otherTab" hidden><div class="m1">遊戲已在其他分頁開啟</div></div>
+<div id="safeProbe" style="position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)"></div>
+<div id="notes"><div id="saveNote"></div><div id="error"></div></div>
 <script src="game.js"></script>
 </body>
 </html>

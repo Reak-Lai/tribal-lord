@@ -1,25 +1,28 @@
-// 部落領主 demo v1a（純 JS，無模組，可直接以 file:// 開啟）
-// 規格：idle-core-loop/tribe/handoff/demo-v1a-dev-spec.md（§16 待確認項目一律照「開發預設」）。
+// 部落領主 demo v2-land.22（橫式 UI 原型；純 JS，無模組，可直接以 file:// 開啟）
+// 遊戲規則 = demo v1a.3（idle-core-loop/tribe/handoff/demo-v1a-dev-spec.md），一律不動；
+// 畫面 = idle-core-loop/tribe/ui-landscape-v2/ui-landscape-v2.md（1280×720 設計單位 du，以高度對齊）。
 // 這版沒有戰鬥、偵察、遠征、世界地圖、人口事件；人口固定。所有數字都在 CONFIG（標「佔位」「預設」的之後只改這裡）。
-// 字型：Cubic 11（俐方體11號，https://github.com/ACh-K/Cubic-11）子集，family 改名 TribePixel，授權 SIL OFL 1.1（全文見 assets/OFL.txt；單檔版內嵌於 #font-license）。
+// 字型（v2-land.12）：內嵌芫荽 Iansui Regular 子集（SIL OFL 1.1），只用一般粗細；備用字型照舊是系統字型（PingFang TC／Noto Sans TC）。
 
-var VERSION = 'demo v1a.1';
+var VERSION = 'demo v2-land.22';
 
 var CONFIG = {
   // ===== 迴圈與存檔 =====
   tickMs: 250,                 // 遊戲迴圈間隔（毫秒）
   maxTickSec: 1,               // 單次 tick 最多算幾秒（切回分頁不補時間：離線不產出、不消耗）
   autosaveSec: 5,              // 自動存檔間隔（秒）
-  saveKey: 'tribalLordSave_demoV1a',
-  saveVersion: 'demo-v1a-1',
+  saveKey: 'tribalLordSave_v2land',      // 橫式原型用自己的鍵，不會改到 v1a.3 的存檔
+  importKey: 'tribalLordSave_demoV1a',   // 沒有橫式存檔時，複製一份 v1a.3 存檔來用（只讀，不刪、不改 v1a.3 的存檔）
+  saveVersion: 'demo-v1a-1',             // 存檔格式和 v1a.3 相同，只多 goalIndex、lastSeen
   oldSaveKeys: ['tribalLordSave_v04'],   // v0.4–v0.8 舊存檔：不相容，開新局並提示玩家（舊檔改名保留，不刪）
 
   // ===== §1 開局與人口 =====
   popMin: 20, popMax: 40,      // 開局人口 P 均勻整數【定案】
   heroRatio: 0.05,             // H = round(0.05 × P)【預設 §16 #5】
   startFoodPerPop: 12,         // 開局食物 = 12 × P【定案】
-  startMatPer10: 35,           // 開局建材 = 35 × ⌈P/10⌉ + 20【定案】
-  startMatBase: 20,
+  startMatBase: 50,            // v2-land.21（economy-demo-final §1 #4）：開局建材 = Σ_{n=1..n0} round(120 × 1.15^(n−1)) + 50，n0 = ⌈0.2P ÷ 1.75⌉
+  startMatHouses: 0.2, startMatPerHouse: 1.75, startMatFirst: 120,
+  costMult: 6, costGrowth: 1.15,   // v2-land.21 §1 #1：第 n 座 = round(基礎 × 6 × 1.15^(n−1) × Π(1 − 減費%))
 
   // ===== §2 人物 =====
   maleRatio: 0.5,              // 性別 50/50【預設 §16 #4】
@@ -51,7 +54,8 @@ var CONFIG = {
   resTalentPerStar: 3, resTalentOffset: -1,
 
   // ===== §8 領主 =====
-  lordPointsMin: 15, lordPointsMax: 20,   // 隨機 15–20 點（均勻整數）【定案】
+  lordSysPoints: 10,           // 系統點 10：開新局時每點平均隨機給 5 項之一（那項已 5★ 就重抽），玩家不能拿掉【企劃 v1a.3】
+  lordFreePoints: 10,          // 自由點 10：玩家自己 ＋／－；合計固定 20【企劃 v1a.3】
   lordAttrMax: 5,              // 每項最多 5★【定案】
   lordName: '領主',            // 規格沒有命名規則 → 只顯示「領主」（需要企劃確認）
 
@@ -67,6 +71,7 @@ var CONFIG = {
 
   // ===== §10 食物、幸福度 =====
   foodPerPersonPerSec: 0.2,    // 每人每秒吃 0.2【定案】
+  foodUpkeep: true,             // 暫時測試版：false = 不扣食物；恢復改 true
   soldierFoodMult: 1.2,        // 駐守士兵 ×1.2【定案】
   lordEats: false,             // 領主不吃【預設 §16 #12】
   happinessStart: 60,          // 起始 60（+ 感召點數，取整數）【定案】
@@ -74,27 +79,32 @@ var CONFIG = {
   happinessMin: 0,
 
   // ===== §9.3 撿柴 =====
-  gatherPerIdlePerSec: 0.02,   // 伐木場 0 座時每名閒置居民 0.02 建材/秒 × (1 + 耐力項)；蓋第一座伐木場後永久停止【定案】
+  gatherPerIdlePerSec: 0.02,   // v2-land.21 §1 #7：每名閒置居民 0.02 建材/秒 × (1 + 耐力項)，不管有沒有伐木場；訓練中、士兵不撿
 
   // ===== §11 軍營 =====
   enlistMinValor: 3,           // 勇武 cur ≥ 3★【定案】
   enlistNeedsBarracks: 1,      // 至少 1 座軍營【預設 §16 #21】
+  enlistFood: 30, enlistSec: 60, enlistQueueMax: 5, barracksCapL1: 30,   // v2-land.21 §2：30 食物（按下時扣）、60 秒、佇列最多 5 人（排第一的在訓練）、軍營 L1 上限 30 名士兵
+  lordValorEnlistPerStar: 0.04, lordCommandFoodPerStar: 0.04, lordBonusMax: 0.2,   // §1 #12：領主勇武每星入伍 −4%、統帥每星士兵食物 −4%，最多 −20%
+  offlineRate: 0.5, offlineMaxSec: 28800,   // §1 #14：離線收益 = 線上 50%，最多 8 小時
+  storageBase: 1000, storagePer: 1000,      // §1 #16：每種資源上限 = (1000 + Σ 1000 × 1.15^(n−1)) × (1 + 負重%)
+  strayBase: 10, strayTravelSec: 30, strayCooldownSec: 90,   // v2-land.22 §1 #19：花費 P × (10 + G) 食物；30 秒後到達；冷卻 90 秒從到達算起（企劃補充決定）
   reenlistLockSec: 300,        // 轉回後 5 分鐘不能再入伍，真實時間（含離線）【定案；含離線 = 預設 §16 #22】
 
   // ===== §13.4 職業分配 =====
-  idleHintSurplus: 1.30,       // 「還能閒置 N 人」：食物產量 ≥ 消耗 × 130%【預設 §16 #23】
+  idleHintSurplus: 1.15,       // 「還能閒置 N 人」：食物產量 ≥ 消耗 × 130%【預設 §16 #23】
   holdDelayMs: 400,            // 長按 0.4 秒後
   holdRepeatMs: 100,           // 每 0.1 秒連續加減
 
-  // ===== §12 地圖 =====
+  // ===== §12 地圖（格位、地形沿用 v1a；尺寸改用橫式 v2 的設計單位 du）=====
   map: {
-    cols: 18, rows: 14, tile: 20,          // 18×14，每格 20 邏輯 px【定案】
-    viewX: 0, viewY: 40, viewW: 180, viewH: 250,   // 地圖視窗【定案 20:07】
-    homeX: 100, homeY: 25,                 // 回營地鏡頭【定案】
-    dragThresholdCss: 6,                   // 移動 ≥ 6 CSS px 才算拖曳【定案】
-    hitPad: 4,                             // 議事廳／軍營點擊區外擴 4 邏輯 px（28×28）【定案／軍營 = 預設】
-    spriteOffset: 2,                       // 建築圖 16×16 畫在 (20c + 2, 20r + 2)【佔位】
+    cols: 18, rows: 14, tile: 96,          // 18×14，每格 96 du → 世界 1728×1344 du（橫式 v2 §3.2）
+    campfire: [8, 6],                      // 營火【橫式 v2 新，裝飾】中心 (816,624) du；回營地鏡頭對準這裡
+    dragThresholdCss: 6,                   // 移動 ≥ 6 CSS px 才算拖曳（不乘 u）【定案】
+    hitPad: 12,                            // 議事廳／軍營點擊區外擴 12 du（120×120）【橫式 v2 §2.1】
+    homeTolDu: 8,                          // 鏡頭離營地 ±8 du 以內算「在營地」（回營地按鈕變灰）
     // 地形（欄 c、列 r，0 起算）【定案】；JSON 裡的小部落格 (17,1)、(0,12) 本版不畫
+    // v2-land.20（企劃回覆 v2-land.19 第 2 項）：河改成處處一格寬（16 張 autotile 沒有內角圖）；(13,12)、(14,12) 由水改成草地，河道照舊往右下
     grid: [
       '......FFFFFFF.....',
       '.AAA..FFFFFFF.....',
@@ -108,11 +118,16 @@ var CONFIG = {
       '.GGG..............',
       '..................',
       '.............WWW..',
-      '.............WWWW.',
+      '...............WW.',
       '..................'
     ]
   },
   realSecPerGameDay: 3600,     // 真實 1 小時 = 遊戲 1 天（ui-layout-v1 §2.1）
+
+  // ===== 橫式 v2 畫面用（不影響數值）=====
+  welcomeMinAwaySec: 60,       // 歡迎回來：離開 ≥ 60 秒才跳（§7）
+  floatEverySec: 10,           // 浮動產量數字：每 10 秒每個職業一次（§3.6，純裝飾）
+  floatMax: 4,
 
   // ===== §9.1 建築表 =====
   // cost：建材；slots：每座工位；rate：每名工人每秒產量；tiles：地圖格位（依序使用）
@@ -120,11 +135,11 @@ var CONFIG = {
     { id: 'council',  name: '議事廳',   cost: 0,  start: 1, tiles: [[9, 7]] },                                   // 開局已蓋好，不能拆【定案】
     { id: 'house',    name: '居民住所', cost: 10, beds: 2, tiles: [[8, 9], [7, 9], [6, 9], [8, 10], [7, 10]] },  // 2 床【定案】
     { id: 'lumber',   name: '伐木場',   cost: 15, slots: 2, job: 'lumber', produces: 'material', rate: 0.12, tiles: [[9, 5], [8, 5], [10, 5], [7, 5], [11, 5]] },        // 【定案】
-    { id: 'lodge',    name: '狩獵屋',   cost: 20, slots: 5, job: 'hunt', produces: 'food', rate: 0.5, tiles: [[11, 7], [11, 6], [11, 8], [12, 5], [12, 9], [11, 9]] },  // 【定案】
-    { id: 'fishery',  name: '捕魚場',   cost: 20, slots: 4, job: 'fish', produces: 'food', rate: 0.4, tiles: [[12, 11], [13, 10], [14, 10], [12, 12], [15, 10]] },   // 【佔位；花費為假設】
-    { id: 'field',    name: '田',       cost: 20, slots: 4, job: 'farm', produces: 'food', rate: 0.35, tiles: [[4, 3], [4, 2], [3, 4], [4, 1]] },                    // 【佔位；花費為假設】
-    { id: 'ranch',    name: '牧場',     cost: 20, slots: 4, job: 'pasture', produces: 'food', rate: 0.3, tiles: [[4, 7], [4, 8], [4, 6], [4, 9]] },                 // 【佔位；花費為假設】
-    { id: 'pen',      name: '家畜欄',   cost: 20, slots: 3, job: 'livestock', produces: 'food', rate: 0.3, tiles: [[3, 10], [2, 10], [4, 10], [1, 10]] },           // 【佔位；花費為假設】
+    { id: 'lodge',    name: '狩獵屋',   cost: 20, slots: 5, job: 'hunt', produces: 'food', rate: 0.35, tiles: [[11, 7], [11, 6], [11, 8], [12, 5], [12, 9], [11, 9]] },  // 【定案】
+    { id: 'fishery',  name: '捕魚場',   cost: 20, slots: 4, job: 'fish', produces: 'food', rate: 0.28, tiles: [[12, 11], [13, 10], [14, 10], [12, 12], [15, 10]] },   // 【佔位；花費為假設】
+    { id: 'field',    name: '田',       cost: 20, slots: 4, job: 'farm', produces: 'food', rate: 0.245, tiles: [[4, 3], [4, 2], [3, 4], [4, 1]] },                    // 【佔位；花費為假設】
+    { id: 'ranch',    name: '牧場',     cost: 20, slots: 4, job: 'pasture', produces: 'food', rate: 0.21, tiles: [[4, 7], [4, 8], [4, 6], [4, 9]] },                 // 【佔位；花費為假設】
+    { id: 'pen',      name: '家畜欄',   cost: 20, slots: 3, job: 'livestock', produces: 'food', rate: 0.21, tiles: [[3, 10], [2, 10], [4, 10], [1, 10]] },           // 【佔位；花費為假設】
     { id: 'mine',     name: '採礦場',   cost: 20, slots: 2, job: 'mine', produces: 'mineral', rate: 0.12, tiles: [[13, 3], [13, 2], [14, 4], [15, 4]] },            // 【預設 §16 #13】
     { id: 'barracks', name: '軍營',     cost: 20, tiles: [[8, 7]] },        // 入伍功能【花費 = 預設 §16 #14】
     { id: 'clinic',   name: '醫療館',   cost: 20, tiles: [[9, 6]] },        // 本版沒有效果【預設 §16 #14、#20】
@@ -158,12 +173,13 @@ var CONFIG = {
     '智力_craftsman':   { type: 'cost', blds: null },                           // 巧匠（全部建築）
     '生產_farm_yield':  { type: 'prod', jobs: ['farm'] },                       // 精耕
     '生產_farm_plot':   { type: 'slot', bld: 'field' },                         // 墾荒
-    '生產_farm_straw':  { type: 'straw' },                                      // 秸稈
+    '生產_farm_straw':  { type: 'straw' },                                      // 稻草（畫面顯示名稱；內部 key、type 不變）
     '精神_resolve':     { type: 'resolve' },                                    // 堅毅
     '精神_focus':       { type: 'prod', jobs: ['lumber', 'fish', 'mine', 'farm', 'hunt', 'pasture', 'livestock'] },  // 專注（所有生產職業）
     '精神_inspire':     { type: 'inspire' },                                    // 感召
     '生產_fish_yield':  { type: 'prod', jobs: ['fish'] },                       // 撒網
-    '生產_fish_shed':   { type: 'slot', bld: 'fishery' },                       // 漁棚
+    '生產_fish_shed':   { type: 'slot', bld: 'fishery' },
+    '耐力_carry':       { type: 'carry' },                                      // 負重（v2-land.21：倉庫上限 ×(1 + %)）                       // 漁棚
     '生產_fish_gear':   { type: 'cost', blds: ['fishery'] },                    // 漁具
     '耐力_endure':      { type: 'prod', jobs: ['lumber', 'hunt', 'mine'] },     // 持久
     '耐力_mining':      { type: 'prod', jobs: ['mine'] },                       // 挖礦
@@ -237,7 +253,7 @@ var HERO_TALENTS = [ // [id, 類別(屬性), 名稱, min, max, 單位, status, �
   ["生產_farm_yield", "智力", "精耕", 10, 20, "%", "v1", "全部落種田產量提升"],
   ["生產_farm_harvest", "智力", "豐收", 15, 30, "%", "wait_harvest", "每次收成的收成量提升"],
   ["生產_farm_plot", "智力", "墾荒", 1, 1, "格", "v1", "每塊田工位 +1"],
-  ["生產_farm_straw", "智力", "秸稈", 0.005, 0.01, "建材/人/秒", "v1", "每名農夫額外產出建材"],
+  ["生產_farm_straw", "智力", "稻草", 0.005, 0.01, "建材/人/秒", "v1", "每名農夫額外產出建材"],
   ["生產_farm_rotate", "智力", "輪作", 20, 40, "%", "wait_soil", "田地地力下降速度降低"],
   ["生產_past_yield", "統帥", "放牧", 10, 20, "%", "v1", "全部落牧耕產量提升"],
   ["生產_live_yield", "統帥", "畜產", 10, 20, "%", "v1", "家畜的食物產量提升"],
