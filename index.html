@@ -19,10 +19,10 @@ canvas { display: block; touch-action: none; }
 <body>
 <canvas id="game" aria-label="阿斑下樓梯 Banban：同人作品，原作 NS-SHAFT／NAGI-P SOFT"></canvas>
 <script>
-// 阿斑下樓梯 Banban v1.1（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
+// 阿斑下樓梯 Banban v1.2（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
 (() => {
 'use strict';
-const VERSION = '阿斑下樓梯 v1.1';
+const VERSION = '阿斑下樓梯 v1.2';
 const CREDIT = '同人作品｜原作 NS-SHAFT／NAGI-P SOFT';
 
 // ---- 數值（邏輯座標：畫面 360×640，整張畫布等比縮放）----
@@ -33,9 +33,10 @@ const CEIL_Y = HUD_H + SPIKE_H;   // 玩家頭頂碰到這條線 = 碰到尖刺
 const PW = 20, PH = 26;           // 玩家
 const PLAT_W = 90, PLAT_H = 12;   // 平台寬 ≈ 畫面 1/4
 const GAP = 80;                   // 平台垂直間距（固定）
-const MAX_LIFE = 10, START_LIFE = 10, HEAL = 1, DMG = 5;
+const MAX_LIFE = 5, START_LIFE = 5, HEAL = 1, DMG = 1;   // v1.2：愛心 5 顆，釘板／頂刺各扣 1
+const HEAL_STREAK = 8;            // 連續踩到 8 塊新的一般平台回 1 顆；踩釘板或被頂刺打到就歸零
 const MOVE = 200;                 // 左右速度 px/s
-const GRAV = 1600, MAX_FALL = 560;
+const GRAV = 1100, MAX_FALL = 400;     // v1.2：原本 1600／560，掉慢一點
 const SCROLL0 = 50, SCROLL_STEP = 0.05; // 起始捲動 px/s；每 10 層 +5%（以起始值計）
 const CEIL_INVULN = 0.6, CEIL_PUSH = 160; // 頂刺：扣血後 0.6 秒內不再扣；往下推 160 px/s 並穿過腳下平台
 const DT = 1 / 120;
@@ -103,26 +104,28 @@ function clearInput() { keys.ArrowLeft = keys.ArrowRight = 0; ptrs.clear(); }
 
 // ---- 遊戲狀態 ----
 let mode = 'title', plats = [], player = null, life = START_LIFE, floors = 0, invuln = 0, lastY = 0, nextId = 0;
-let hurtT = 0;   // 只影響畫面：受傷動作顯示的剩餘秒數
+let hurtT = 0, streak = 0;   // streak：連續踩到新一般平台的塊數   // 只影響畫面：受傷動作顯示的剩餘秒數
 let gen = null, seed = 0, nextSeed = null, overReason = '', overAt = 0, clock = 0, games = 0;
 const scrollSpeed = () => SCROLL0 * (1 + SCROLL_STEP * Math.floor(floors / 10));
 
-function fill() { while (lastY < H + GAP * 2) { const r = nextRow(gen); lastY += GAP; plats.push({ x: r.x, y: lastY, py: lastY, type: r.type, id: ++nextId, visited: false }); } }
+function fill() { while (lastY < H + GAP * 2) { const r = nextRow(gen); lastY += GAP; plats.push({ x: r.x, y: lastY, py: lastY, type: r.type, id: ++nextId, row: nextId, visited: false }); } }   // 每排一塊，row = 從起點往下第幾排
 function newGame(s) {
   seed = s !== undefined ? s >>> 0 : nextSeed !== null ? nextSeed : (Math.random() * 2 ** 32) >>> 0; nextSeed = null;
   gen = makeGen(seed); nextId = 0; lastY = 240;
-  plats = [{ x: gen.prev.x, y: lastY, py: lastY, type: 'normal', id: 0, visited: true }];
+  plats = [{ x: gen.prev.x, y: lastY, py: lastY, type: 'normal', id: 0, row: 0, visited: true }];
   fill();
   player = { x: W / 2 - PW / 2, y: lastY - GAP * 0 - PH, vy: 0, on: plats[0], ignore: null };
   player.y = plats[0].y - PH;
-  life = START_LIFE; floors = 0; invuln = 0; hurtT = 0; overReason = ''; mode = 'play'; games++;
+  life = START_LIFE; floors = 0; invuln = 0; hurtT = 0; streak = 0; overReason = ''; mode = 'play'; games++;
   ptrs.clear();
 }
-function hurt(n) { life = Math.max(0, life - n); hurtT = 0.4; }
+function hurt(n) { life = Math.max(0, life - n); hurtT = 0.4; streak = 0; }
 function land(p) {
+  const fresh = !p.visited;
   player.on = p; player.vy = 0; player.y = p.y - PH;
-  if (!p.visited) { p.visited = true; floors++; }
-  if (p.type === 'spike') hurt(DMG); else life = Math.min(MAX_LIFE, life + HEAL);
+  p.visited = true; floors = Math.max(floors, p.row);   // 層數 = 實際往下到第幾排，跳過的也算；往回不減
+  if (p.type === 'spike') hurt(DMG);
+  else if (fresh && ++streak >= HEAL_STREAK) { streak = 0; life = Math.min(MAX_LIFE, life + HEAL); }
 }
 function gameOver(why) { mode = 'over'; overReason = why; overAt = clock; }
 
@@ -164,84 +167,165 @@ function step(dt) {
 // ---- 畫面 ----
 // ---- 像素圖（1 美術像素 = 2×2 遊戲像素；'.' = 透明）----
 const PAL = {
-  K: '#1c1418', H: '#55331f', S: '#f2c39b', N: '#2c4590', O: '#ea8a2a', P: '#e8ddc3', Q: '#b9a787',
-  R: '#cc3340', W: '#ffffff', T: '#2a9e9c', L: '#7fded3', D: '#14575b', G: '#2d313b', M: '#5d6474', E: '#ff6a4d',
+  K: '#1c1418', H: '#55331f', S: '#f2c39b', F: '#de8f74', N: '#2c4590', O: '#ea8a2a', P: '#e8ddc3', Q: '#b9a787',
+  R: '#cc3340', W: '#ffffff', T: '#2a9e9c', L: '#7fded3', D: '#14575b', G: '#2d313b', M: '#5d6474',
 };
 const SPR = {
-  stand: [
-    '....KK....',
-    '...KHHK...',
-    '..KKKKKK..',
-    '.KHHKKHHK.',
-    '.KKSSSSKK.',
-    '.KSKSSKSK.',
-    '..KSSSSK..',
-    '..NNNNNN..',
-    '.SNNNNONS.',
-    '..NNNNNN..',
-    '..PPPPPP..',
-    '..PQ..QP..',
-    '.RWR..RWR.',
+  stand: [   // 20×26，1 美術像素 = 1 遊戲像素
+    '........KKKK........',
+    '.......KHHKKK.......',
+    '........KNNK........',
+    '.....KKKKKKKKKK.....',
+    '....KHHKKKKKKKKK....',
+    '...KHKKKKKKKKKKHK...',
+    '...KKKSSKKKKSSKKK...',
+    '..KKSSSSSSKSSSSSKK..',
+    '.SKSSKKSSSSSSKKSSKS.',
+    '.SKSSWKSSSSSSWKSSKS.',
+    '..KFSKKSSSSSSKKSFK..',
+    '...KSSSSSRRSSSSSK...',
+    '....KKSSSSSSSSKK....',
+    '.....NNNNNNNNNN.....',
+    '....SNNNNNNNNOOS....',
+    '....SNNNNNNNNOOS....',
+    '....SNNNNNNNNNNS....',
+    '.....PPPPPPPPPP.....',
+    '.....PPPPQQPPPP.....',
+    '.....PPPP..PPPP.....',
+    '.....QPPQ..QPPQ.....',
+    '....RWWR...RWWR.....',
+    '....RWRWR..RWRWR....',
+    '....RWWRR..RWWRR....',
+    '....RWRWR..RWRWR....',
+    '....RWWRR..RWWRR....',
   ],
-  walk1: [
-    '..KK......',
-    '.KHHK.....',
-    '..KKKKK...',
-    '.KHKKKKK..',
-    '.KKKKSSS..',
-    '.KKKSSKS..',
-    '..KKSSSS..',
-    '...NNNN...',
-    '..SNNNOS..',
-    '...NNNN...',
-    '...PPPP...',
-    '..PP..PP..',
-    '.RWR..RWRR',
+  walk1: [   // 20×26，1 美術像素 = 1 遊戲像素
+    '....KKKK............',
+    '...KHHKKK...........',
+    '....KKNK............',
+    '....KKKKKKKKKK......',
+    '...KHHKKKKKKKKK.....',
+    '..KHKKKKKKKKKKKK....',
+    '..KKKKKKKKKKKSSKK...',
+    '..KKKKKKKSSSSSSSK...',
+    '..KKKKKSSSSSKKSSSK..',
+    '..KKKKSSSSSSWKSSSS..',
+    '..KKKKSFSSSSKKSFSK..',
+    '...KKKSSSSSSSSRSK...',
+    '....KKKSSSSSSSKK....',
+    '.......NNNNNNN......',
+    '......SNNNNNOOS.....',
+    '.....S.NNNNNOO.S....',
+    '.......NNNNNNN......',
+    '.......PPPPPPP......',
+    '......PPPPPPPPP.....',
+    '.....PPPP..PPPP.....',
+    '....QPPP....PPPQ....',
+    '...RWWR......RWWRR..',
+    '...RWRWR.....RWRWRR.',
+    '...RWWRR.....RWWRRR.',
+    '...RWRWR.....RWRWRR.',
+    '...RWWRR.....RWWRRR.',
   ],
-  walk2: [
-    '..KK......',
-    '.KHHK.....',
-    '..KKKKK...',
-    '.KHKKKKK..',
-    '.KKKKSSS..',
-    '.KKKSSKS..',
-    '..KKSSSS..',
-    '...NNNN...',
-    '...NNNOS..',
-    '...NNNN...',
-    '...PPPP...',
-    '...PPPQ...',
-    '...RWRRR..',
+  walk2: [   // 20×26，1 美術像素 = 1 遊戲像素
+    '....KKKK............',
+    '...KHHKKK...........',
+    '....KKNK............',
+    '....KKKKKKKKKK......',
+    '...KHHKKKKKKKKK.....',
+    '..KHKKKKKKKKKKKK....',
+    '..KKKKKKKKKKKSSKK...',
+    '..KKKKKKKSSSSSSSK...',
+    '..KKKKKSSSSSKKSSSK..',
+    '..KKKKSSSSSSWKSSSS..',
+    '..KKKKSFSSSSKKSFSK..',
+    '...KKKSSSSSSSSRSK...',
+    '....KKKSSSSSSSKK....',
+    '.......NNNNNNN......',
+    '.......NNNNNOOS.....',
+    '.......NSNNNOO......',
+    '.......NNNNNNN......',
+    '.......PPPPPPP......',
+    '.......PPPPPPP......',
+    '........PPPPP.......',
+    '........QPPPQ.......',
+    '........RWWRR.......',
+    '........RWRWRR......',
+    '........RWWRRR......',
+    '........RWRWRR......',
+    '........RWWRRR......',
   ],
-  fall: [
-    '....KK....',
-    '...KHHK...',
-    'S.KKKKKK.S',
-    'SKHHKKHHKS',
-    'SKKSSSSKKS',
-    'NKSKSSKSKN',
-    '.NKSRRSKN.',
-    '..NNNNNN..',
-    '..NNNNON..',
-    '..NNNNNN..',
-    '..PPPPPP..',
-    '.PP....PP.',
-    '.RW....WR.',
+  fall: [   // 20×26，1 美術像素 = 1 遊戲像素
+    '........KKKK........',
+    '..S....KHHKKK....S..',
+    '.SS.....KNNK.....SS.',
+    '.SS..KKKKKKKKKK..SS.',
+    '..S.KHHKKKKKKKKK.S..',
+    '..NKHKKKKKKKKKKHKN..',
+    '..NKKKSSKKKKSSKKKN..',
+    '..KKSSSSSSKSSSSSKK..',
+    '.SKSSKKSSSSSSKKSSKS.',
+    '.SKSSWKSSSSSSWKSSKS.',
+    '..KFSKKSSSSSSKKSFK..',
+    '...KSSSSSRRSSSSSK...',
+    '....KKSSSRRSSSKK....',
+    '.....NNNNNNNNNN.....',
+    '.....NNNNNNNNOO.....',
+    '.....NNNNNNNNOO.....',
+    '.....NNNNNNNNNN.....',
+    '.....PPPPPPPPPP.....',
+    '....PPPPPQQPPPPP....',
+    '...PPPPP....PPPPP...',
+    '...QPPQ......QPPQ...',
+    '..RWWR........RWWR..',
+    '..RWRWR......RWRWR..',
+    '..RWWRR......RWWRR..',
+    '..RWRWR......RWRWR..',
+    '..RWWRR......RWWRR..',
   ],
-  hurt: [
-    '..........',
-    '....KK....',
-    '...KHHK...',
-    '..KKKKKK..',
-    '.KHHKKHHK.',
-    '.KKSSSSKK.',
-    '.KKKSSKKK.',
-    '..KSRRSK..',
-    '.NNNNNNNN.',
-    '.NNSSSONN.',
-    '..PPPPPP..',
-    '..PQ..QP..',
-    '.RWR..RWR.',
+  hurt: [   // 20×26，1 美術像素 = 1 遊戲像素
+    '....................',
+    '........KKKK........',
+    '.......KHHKKK.......',
+    '........KNNK........',
+    '.....KKKKKKKKKK.....',
+    '....KHHKKKKKKKKK....',
+    '...KHKKKKKKKKKKHK...',
+    '...KKKSSKKKKSSKKK...',
+    '..KKSSSSSSKSSSSSKK..',
+    '.SKSKSSSSSSSSSSKSKS.',
+    '.SKSSKKSSSSSSKKSSKS.',
+    '..KFSSSSSSSSSSSSFK..',
+    '...KSSSSKKKKSSSSK...',
+    '....KKSSSSSSSSKK....',
+    '....NNNNNNNNNNNN....',
+    '...NNSSSSSSSSOONN...',
+    '....NNNNNNNNNNNN....',
+    '.....PPPPPPPPPP.....',
+    '....PPPPPQQPPPPP....',
+    '....PPPP....PPPP....',
+    '....QPPQ....QPPQ....',
+    '....RWWR....RWWR....',
+    '....RWRWR...RWRWR...',
+    '....RWWRR...RWWRR...',
+    '....RWRWR...RWRWR...',
+    '....RWWRR...RWWRR...',
+  ],
+  heart: [
+    '.RR.RR.',
+    'RWRRRRR',
+    'RRRRRRR',
+    '.RRRRR.',
+    '..RRR..',
+    '...R...',
+  ],
+  heart0: [
+    '.MM.MM.',
+    'MGGMGGM',
+    'MGGGGGM',
+    '.MGGGM.',
+    '..MGM..',
+    '...M...',
   ],
   plat: [
     '.LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL.',
@@ -252,9 +336,9 @@ const SPR = {
     '.DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD.',
   ],
   spike: [
-    '..E....E....E....E....E....E....E....E....E..',
     '..R....R....R....R....R....R....R....R....R..',
-    '.RER..RER..RER..RER..RER..RER..RER..RER..RER.',
+    '..R....R....R....R....R....R....R....R....R..',
+    '.RRR..RRR..RRR..RRR..RRR..RRR..RRR..RRR..RRR.',
     '.MMG..MMG..MMG..MMG..MMG..MMG..MMG..MMG..MMG.',
     'MMMGGMMMGGMMMGGMMMGGMMMGGMMMGGMMMGGMMMGGMMMGG',
     'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM',
@@ -282,7 +366,7 @@ function resize() {
 }
 // 對齊實體像素，像素圖才不會糊或忽粗忽細
 const snap = v => Math.round(v * cv.width / W) / (cv.width / W);
-function blit(img, x, y) { ctx.drawImage(img, snap(x), snap(y), img.width * 2, img.height * 2); }
+function blit(img, x, y, k = 2) { ctx.drawImage(img, snap(x), snap(y), img.width * k, img.height * k); }   // k：1 美術像素 = k 遊戲像素
 const FONT = '"PingFang TC","Noto Sans TC","Noto Sans CJK TC","Microsoft JhengHei","Noto Serif CJK TC",sans-serif';
 const font = (px, b) => (b ? 'bold ' : '') + px + 'px ' + FONT;
 function text(s, x, y, px, color, align = 'center', bold = false) { ctx.font = font(px, bold); ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); }
@@ -296,7 +380,7 @@ function drawPlayer() {
   const d = inputDir();
   const img = hurtT > 0 ? IMG.hurt : !player.on ? IMG.fall
     : d ? IMG[(Math.floor(clock * 8) % 2 ? 'walk2' : 'walk1') + (d < 0 ? 'L' : '')] : IMG.stand;
-  blit(img, player.x, player.y);
+  blit(img, player.x, player.y, 1);   // 女孩是 20×26 原尺寸
 }
 function drawArrows() {
   const d = mode === 'play' ? inputDir() : 0, y = H - 46;
@@ -309,8 +393,7 @@ function drawArrows() {
 function drawHUD() {
   ctx.fillStyle = '#11141b'; ctx.fillRect(0, 0, W, HUD_H);
   text('生命', 10, HUD_H / 2, 13, '#cfd6e4', 'left');
-  for (let i = 0; i < MAX_LIFE; i++) { ctx.fillStyle = i < life ? '#ff6b6b' : '#3a3f4c'; ctx.fillRect(44 + i * 13, 14, 11, 16); }
-  text(String(life), 44 + MAX_LIFE * 13 + 6, HUD_H / 2, 13, '#cfd6e4', 'left');
+  for (let i = 0; i < MAX_LIFE; i++) blit(i < life ? IMG.heart : IMG.heart0, 46 + i * 18, 16);   // 像素愛心 7×6 → 14×12
   text(floors + ' 層', W - 10, HUD_H / 2, 20, '#ffffff', 'right', true);
   ctx.fillStyle = '#e8505b'; ctx.beginPath();   // 頂部尖刺
   for (let x = 0; x < W; x += 12) { ctx.moveTo(x, HUD_H); ctx.lineTo(x + 6, HUD_H + SPIKE_H); ctx.lineTo(x + 12, HUD_H); }
@@ -326,7 +409,7 @@ function draw() {
   if (player) { for (const p of plats) drawPlat(p); drawPlayer(); }
   drawArrows(); drawHUD();
   if (mode === 'title') panel([
-    ['阿斑下樓梯', 212, 30, '#ffd34d', true], ['Banban　v1.1', 244, 13, '#8b93a5'],
+    ['阿斑下樓梯', 212, 30, '#ffd34d', true], ['Banban　v1.2', 244, 13, '#8b93a5'],
     ['手機：按住左／右半邊移動', 290, 15, '#e6e9f0'], ['電腦：← → 方向鍵', 316, 15, '#e6e9f0'],
     ['點一下或按空白鍵開始', 370, 17, '#ffffff', true], [CREDIT, 440, 12, '#aab2c3']]);
   else if (mode === 'over') panel([
@@ -367,10 +450,10 @@ resize(); requestAnimationFrame(loop);
 // ---- 測試介面（遊戲本身不會用到）----
 window.__stairs = {
   version: VERSION, credit: CREDIT,
-  C: { W, H, HUD_H, CEIL_Y, PW, PH, PLAT_W, PLAT_H, GAP, MAX_LIFE, START_LIFE, MOVE, GRAV, MAX_FALL, SCROLL0, SCROLL_STEP, CEIL_INVULN, CEIL_PUSH, DT, AIR, MIN_OV },
-  state: () => ({ mode, life, floors, invuln, overReason, seed, games, scroll: scrollSpeed(), dir: inputDir(), ptrs: ptrs.size,
+  C: { W, H, HUD_H, CEIL_Y, PW, PH, PLAT_W, PLAT_H, GAP, MAX_LIFE, START_LIFE, HEAL_STREAK, DMG, MOVE, GRAV, MAX_FALL, SCROLL0, SCROLL_STEP, CEIL_INVULN, CEIL_PUSH, DT, AIR, MIN_OV },
+  state: () => ({ mode, life, streak, floors, invuln, overReason, seed, games, scroll: scrollSpeed(), dir: inputDir(), ptrs: ptrs.size,
     player: player && { x: player.x, y: player.y, vy: player.vy, on: player.on ? player.on.id : null, onType: player.on ? player.on.type : null },
-    plats: plats.map(p => ({ id: p.id, x: p.x, y: p.y, type: p.type, visited: p.visited })) }),
+    plats: plats.map(p => ({ id: p.id, row: p.row, x: p.x, y: p.y, type: p.type, visited: p.visited })) }),
   setSeed: s => { nextSeed = s >>> 0; },
   start: s => newGame(s),
   pause: b => { paused = !!b; acc = 0; },
@@ -379,7 +462,7 @@ window.__stairs = {
   reachable,
   // 測試用：擺一個指定場景。plats: [{x,y,type}]，玩家放在 (px,py)
   setup: ({ plats: ps, px, py, life: l, floors: f }) => {
-    newGame(1); plats = ps.map((p, i) => ({ x: p.x, y: p.y, py: p.y, type: p.type, id: 1000 + i, visited: false }));
+    newGame(1); plats = ps.map((p, i) => ({ x: p.x, y: p.y, py: p.y, type: p.type, id: 1000 + i, row: p.row !== undefined ? p.row : (f || 0) + 1 + i, visited: false }));
     lastY = 1e9; player = { x: px, y: py, vy: 0, on: null, ignore: null };
     if (l !== undefined) life = l; if (f !== undefined) floors = f;
   },
