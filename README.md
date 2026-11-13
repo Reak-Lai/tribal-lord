@@ -1,4 +1,4 @@
-# 小朋友下樓梯 v1.0
+# 阿斑下樓梯 Banban v1.1
 
 ## ▶ [點這裡玩](https://reak-lai.github.io/tribal-lord/)
 

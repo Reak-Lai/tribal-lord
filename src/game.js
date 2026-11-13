@@ -1,7 +1,7 @@
-// 小朋友下樓梯 v1.0（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
+// 阿斑下樓梯 Banban v1.1（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
 (() => {
 'use strict';
-const VERSION = '小朋友下樓梯 v1.0';
+const VERSION = '阿斑下樓梯 v1.1';
 const CREDIT = '同人作品｜原作 NS-SHAFT／NAGI-P SOFT';
 
 // ---- 數值（邏輯座標：畫面 360×640，整張畫布等比縮放）----
@@ -82,6 +82,7 @@ function clearInput() { keys.ArrowLeft = keys.ArrowRight = 0; ptrs.clear(); }
 
 // ---- 遊戲狀態 ----
 let mode = 'title', plats = [], player = null, life = START_LIFE, floors = 0, invuln = 0, lastY = 0, nextId = 0;
+let hurtT = 0;   // 只影響畫面：受傷動作顯示的剩餘秒數
 let gen = null, seed = 0, nextSeed = null, overReason = '', overAt = 0, clock = 0, games = 0;
 const scrollSpeed = () => SCROLL0 * (1 + SCROLL_STEP * Math.floor(floors / 10));
 
@@ -93,10 +94,10 @@ function newGame(s) {
   fill();
   player = { x: W / 2 - PW / 2, y: lastY - GAP * 0 - PH, vy: 0, on: plats[0], ignore: null };
   player.y = plats[0].y - PH;
-  life = START_LIFE; floors = 0; invuln = 0; overReason = ''; mode = 'play'; games++;
+  life = START_LIFE; floors = 0; invuln = 0; hurtT = 0; overReason = ''; mode = 'play'; games++;
   ptrs.clear();
 }
-function hurt(n) { life = Math.max(0, life - n); }
+function hurt(n) { life = Math.max(0, life - n); hurtT = 0.4; }
 function land(p) {
   player.on = p; player.vy = 0; player.y = p.y - PH;
   if (!p.visited) { p.visited = true; floors++; }
@@ -112,7 +113,7 @@ function step(dt) {
   lastY -= sp * dt;
   while (plats.length && plats[0].y + PLAT_H < 0) plats.shift();
   fill();
-  invuln = Math.max(0, invuln - dt);
+  invuln = Math.max(0, invuln - dt); hurtT = Math.max(0, hurtT - dt);
   player.x = Math.min(W - PW, Math.max(0, player.x + inputDir() * MOVE * dt));
   const on = player.on;
   if (on) {
@@ -140,6 +141,115 @@ function step(dt) {
 }
 
 // ---- 畫面 ----
+// ---- 像素圖（1 美術像素 = 2×2 遊戲像素；'.' = 透明）----
+const PAL = {
+  K: '#1c1418', H: '#55331f', S: '#f2c39b', N: '#2c4590', O: '#ea8a2a', P: '#e8ddc3', Q: '#b9a787',
+  R: '#cc3340', W: '#ffffff', T: '#2a9e9c', L: '#7fded3', D: '#14575b', G: '#2d313b', M: '#5d6474', E: '#ff6a4d',
+};
+const SPR = {
+  stand: [
+    '....KK....',
+    '...KHHK...',
+    '..KKKKKK..',
+    '.KHHKKHHK.',
+    '.KKSSSSKK.',
+    '.KSKSSKSK.',
+    '..KSSSSK..',
+    '..NNNNNN..',
+    '.SNNNNONS.',
+    '..NNNNNN..',
+    '..PPPPPP..',
+    '..PQ..QP..',
+    '.RWR..RWR.',
+  ],
+  walk1: [
+    '..KK......',
+    '.KHHK.....',
+    '..KKKKK...',
+    '.KHKKKKK..',
+    '.KKKKSSS..',
+    '.KKKSSKS..',
+    '..KKSSSS..',
+    '...NNNN...',
+    '..SNNNOS..',
+    '...NNNN...',
+    '...PPPP...',
+    '..PP..PP..',
+    '.RWR..RWRR',
+  ],
+  walk2: [
+    '..KK......',
+    '.KHHK.....',
+    '..KKKKK...',
+    '.KHKKKKK..',
+    '.KKKKSSS..',
+    '.KKKSSKS..',
+    '..KKSSSS..',
+    '...NNNN...',
+    '...NNNOS..',
+    '...NNNN...',
+    '...PPPP...',
+    '...PPPQ...',
+    '...RWRRR..',
+  ],
+  fall: [
+    '....KK....',
+    '...KHHK...',
+    'S.KKKKKK.S',
+    'SKHHKKHHKS',
+    'SKKSSSSKKS',
+    'NKSKSSKSKN',
+    '.NKSRRSKN.',
+    '..NNNNNN..',
+    '..NNNNON..',
+    '..NNNNNN..',
+    '..PPPPPP..',
+    '.PP....PP.',
+    '.RW....WR.',
+  ],
+  hurt: [
+    '..........',
+    '....KK....',
+    '...KHHK...',
+    '..KKKKKK..',
+    '.KHHKKHHK.',
+    '.KKSSSSKK.',
+    '.KKKSSKKK.',
+    '..KSRRSK..',
+    '.NNNNNNNN.',
+    '.NNSSSONN.',
+    '..PPPPPP..',
+    '..PQ..QP..',
+    '.RWR..RWR.',
+  ],
+  plat: [
+    '.LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL.',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'LTTLTTTTTTTTLTTTTTTTTLTTTTTTTTLTTTTTTTTLTTTTD',
+    'LTTDTTTTTTTTDTTTTTTTTDTTTTTTTTDTTTTTTTTDTTTTD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    '.DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD.',
+  ],
+  spike: [
+    '..E....E....E....E....E....E....E....E....E..',
+    '..R....R....R....R....R....R....R....R....R..',
+    '.RER..RER..RER..RER..RER..RER..RER..RER..RER.',
+    '.MMG..MMG..MMG..MMG..MMG..MMG..MMG..MMG..MMG.',
+    'MMMGGMMMGGMMMGGMMMGGMMMGGMMMGGMMMGGMMMGGMMMGG',
+    'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM',
+    'GGMGGGGGMGGGGGMGGGGGMGGGGGMGGGGGMGGGGGMGGGGGM',
+    'KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK',
+  ],
+};
+// 把字串畫成小畫布（10×13、45×6…），畫的時候再用最近鄰放大 2 倍
+function bake(rows, flip) {
+  const c = document.createElement('canvas'); c.width = rows[0].length; c.height = rows.length;
+  const g = c.getContext('2d');
+  rows.forEach((r, y) => { for (let x = 0; x < r.length; x++) { const ch = flip ? r[r.length - 1 - x] : r[x];
+    if (ch !== '.') { g.fillStyle = PAL[ch]; g.fillRect(x, y, 1, 1); } } });
+  return c;
+}
+const IMG = {}; for (const k in SPR) { IMG[k] = bake(SPR[k]); IMG[k + 'L'] = bake(SPR[k], true); }
 const cv = document.getElementById('game'), ctx = cv.getContext('2d');
 let cssScale = 1;
 function resize() {
@@ -149,26 +259,23 @@ function resize() {
   cv.width = Math.round(W * s * dpr); cv.height = Math.round(H * s * dpr);
   ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
 }
+// 對齊實體像素，像素圖才不會糊或忽粗忽細
+const snap = v => Math.round(v * cv.width / W) / (cv.width / W);
+function blit(img, x, y) { ctx.drawImage(img, snap(x), snap(y), img.width * 2, img.height * 2); }
 const FONT = '"PingFang TC","Noto Sans TC","Noto Sans CJK TC","Microsoft JhengHei","Noto Serif CJK TC",sans-serif';
 const font = (px, b) => (b ? 'bold ' : '') + px + 'px ' + FONT;
 function text(s, x, y, px, color, align = 'center', bold = false) { ctx.font = font(px, bold); ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); }
 
 function drawPlat(p) {
-  if (p.type === 'spike') {
-    ctx.fillStyle = '#8c96a8'; ctx.fillRect(p.x, p.y, PLAT_W, PLAT_H);
-    ctx.fillStyle = '#e8505b'; ctx.beginPath();
-    for (let x = p.x; x < p.x + PLAT_W - 1; x += 10) { ctx.moveTo(x, p.y); ctx.lineTo(x + 5, p.y - 8); ctx.lineTo(x + 10, p.y); }
-    ctx.fill();
-  } else {
-    ctx.fillStyle = '#5fbf6a'; ctx.fillRect(p.x, p.y, PLAT_W, PLAT_H);
-    ctx.fillStyle = '#3e8a47'; ctx.fillRect(p.x, p.y + PLAT_H - 4, PLAT_W, 4);
-  }
+  if (p.type === 'spike') blit(IMG.spike, p.x, p.y - 4);   // 刺往上多畫 2 美術像素，判定不變
+  else blit(IMG.plat, p.x, p.y);
 }
 function drawPlayer() {
   if (invuln > 0 && Math.floor(invuln * 20) % 2 === 0) return;   // 頂刺無敵時閃爍
-  const { x, y } = player;
-  ctx.fillStyle = '#ffd34d'; ctx.fillRect(x, y, PW, PH);
-  ctx.fillStyle = '#2b2b2b'; ctx.fillRect(x + 5, y + 7, 3, 4); ctx.fillRect(x + 12, y + 7, 3, 4);
+  const d = inputDir();
+  const img = hurtT > 0 ? IMG.hurt : !player.on ? IMG.fall
+    : d ? IMG[(Math.floor(clock * 8) % 2 ? 'walk2' : 'walk1') + (d < 0 ? 'L' : '')] : IMG.stand;
+  blit(img, player.x, player.y);
 }
 function drawArrows() {
   const d = mode === 'play' ? inputDir() : 0, y = H - 46;
@@ -193,11 +300,12 @@ function panel(lines) {
   for (const [s, y, px, c, b] of lines) text(s, W / 2, y, px, c, 'center', b);
 }
 function draw() {
+  ctx.imageSmoothingEnabled = false;   // 換畫布大小會重設，所以每格都設
   ctx.fillStyle = '#1b1f2a'; ctx.fillRect(0, 0, W, H);
   if (player) { for (const p of plats) drawPlat(p); drawPlayer(); }
   drawArrows(); drawHUD();
   if (mode === 'title') panel([
-    ['小朋友下樓梯', 212, 30, '#ffd34d', true], ['v1.0', 244, 13, '#8b93a5'],
+    ['阿斑下樓梯', 212, 30, '#ffd34d', true], ['Banban　v1.1', 244, 13, '#8b93a5'],
     ['手機：按住左／右半邊移動', 290, 15, '#e6e9f0'], ['電腦：← → 方向鍵', 316, 15, '#e6e9f0'],
     ['點一下或按空白鍵開始', 370, 17, '#ffffff', true], [CREDIT, 440, 12, '#aab2c3']]);
   else if (mode === 'over') panel([
