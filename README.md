@@ -1,5 +1,7 @@
 # 小朋友下樓梯 v1.0
 
+## ▶ [點這裡玩](https://reak-lai.github.io/tribal-lord/)
+
 同人作品｜原作 NS-SHAFT／NAGI-P SOFT
 
 - 直接打開 `index.html` 就能玩（單一檔案）。
