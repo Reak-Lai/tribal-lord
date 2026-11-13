@@ -1,7 +1,7 @@
-# 部落領主 Tribal Lord
+# 小朋友下樓梯 v1.0
 
-瀏覽器放置／養成遊戲原型，目前版本 demo v1a.1。
+同人作品｜原作 NS-SHAFT／NAGI-P SOFT
 
-直接打開 index.html 就能玩；遊戲網址：https://reak-lai.github.io/tribal-lord/
-
-`src/` 是原始檔，用 `assemble.sh` 組成 game.js。
+- 直接打開 `index.html` 就能玩（單一檔案）。
+- 原始碼在 `src/`，用 `node build.js` 合成 `index.html`。
+- 部落領主 demo 測試 v01_b 備份在分支 `backup/tribal-lord-v01b`。
