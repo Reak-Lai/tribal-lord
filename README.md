@@ -1,4 +1,4 @@
-# 阿斑下樓梯 Banban v1.2
+# 阿斑下樓梯 Banban v1.3
 
 ## ▶ [點這裡玩](https://reak-lai.github.io/tribal-lord/)
 

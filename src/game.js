@@ -1,7 +1,7 @@
-// 阿斑下樓梯 Banban v1.2（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
+// 阿斑下樓梯 Banban v1.3（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
 (() => {
 'use strict';
-const VERSION = '阿斑下樓梯 v1.2';
+const VERSION = '阿斑下樓梯 v1.3';
 const CREDIT = '同人作品｜原作 NS-SHAFT／NAGI-P SOFT';
 
 // ---- 數值（邏輯座標：畫面 360×640，整張畫布等比縮放）----
@@ -10,14 +10,22 @@ const HUD_H = 44;                 // 上方 HUD 高度
 const SPIKE_H = 14;               // 頂部尖刺高度
 const CEIL_Y = HUD_H + SPIKE_H;   // 玩家頭頂碰到這條線 = 碰到尖刺
 const PW = 20, PH = 26;           // 玩家
-const PLAT_W = 90, PLAT_H = 12;   // 平台寬 ≈ 畫面 1/4
+const PLAT_W = 76, PLAT_H = 12;   // 平台寬（§8 Yi Way 00:52：90 → 76，高度不變）
+const PLAT_W2 = 54;               // 一排 2 塊時每塊寬（§8：64 → 54，碰撞框跟著變；間距仍 ≥ 60）
+const pw = p => p.w || PLAT_W;     // 平台寬：沒寫就是單塊寬
 const GAP = 80;                   // 平台垂直間距（固定）
 const MAX_LIFE = 5, START_LIFE = 5, HEAL = 1, DMG = 1;   // v1.2：愛心 5 顆，釘板／頂刺各扣 1
 const HEAL_STREAK = 8;            // 連續踩到 8 塊新的一般平台回 1 顆；踩釘板或被頂刺打到就歸零
 const MOVE = 200;                 // 左右速度 px/s
 const GRAV = 1100, MAX_FALL = 400;     // v1.2：原本 1600／560，掉慢一點
-const SCROLL0 = 50, SCROLL_STEP = 0.05; // 起始捲動 px/s；每 10 層 +5%（以起始值計）
-const CEIL_INVULN = 0.6, CEIL_PUSH = 160; // 頂刺：扣血後 0.6 秒內不再扣；往下推 160 px/s 並穿過腳下平台
+const SCROLL0 = 50, SCROLL_STEP = 0.10, SCROLL_MAX = 125; // v1.3：起始捲動 px/s；每 10 層 +10%（以起始值計）；最快 125 px/s
+const HURT_INVULN = 1.0, CEIL_PUSH = 160; // v1.3：受傷（釘板或頂刺）後閃爍 1.0 秒不再扣；頂刺往下推 160 px/s 並穿過腳下平台
+const ROW2_P = 0.4, ROW2_GAP = 60;     // v1.3：每排 40% 機率有 2 塊平台，同排兩塊至少隔 60 px（Yi Way 23:31 從 30 改 60）
+// v1.4 火龍：每到 100、200…層出現 6 秒；這段時間新產生的一般平台有 P_FIRE 機率變火焰平台（效果跟釘板一樣）
+const DRAGON_EVERY = 100, DRAGON_T = 6.0;
+const DRAGON_ROW2_P = 1.0;   // 開發自訂（待企劃確認）：火龍期間每排都先試著排 2 塊，不然「同排要留 1 塊不扣血」會讓火焰平台幾乎不出現
+const P_FIRE = n => Math.min(0.60, 0.30 + 0.05 * (n - 1));   // n = 第幾次（100 層 = 1）
+const SPRING_EVERY = 8, SPRING_V = 360; // v1.3：每 8 排 1 塊彈簧；踩到往上彈的初速 px/s（GRAV 1100 → 約彈 59 px）
 const DT = 1 / 120;
 const AIR = 24, MIN_OV = 6;       // 生成器假設：離開邊緣後最多再往外飄 24 px；落地至少重疊 6 px
 const SPIKE_EVERY = 5;            // 每 5 層裡剛好 1 塊釘板（4:1）
@@ -28,13 +36,14 @@ function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = 
 
 // ---- 平台生成器：保證每塊平台都走得到下一塊一般平台 ----
 // 從平台 P 的某一邊走下去，玩家剛離開時 x 在 [lo, hi]，能落在 Q 上嗎
-function canLand(lo, hi, Q) { return lo <= hi && Q.x <= hi + PW - MIN_OV && Q.x + PLAT_W >= lo + MIN_OV; }
-function dropX(P, d) { const x0 = d > 0 ? P.x + PLAT_W : P.x - PW; return (x0 < 0 || x0 + PW > W) ? null : x0; }
+function canLand(lo, hi, Q) { return lo <= hi && Q.x <= hi + PW - MIN_OV && Q.x + pw(Q) >= lo + MIN_OV; }
+function dropX(P, d) { const x0 = d > 0 ? P.x + pw(P) : P.x - PW; return (x0 < 0 || x0 + PW > W) ? null : x0; }
 function reachSide(P, Q, d) { const x0 = dropX(P, d); if (x0 === null) return false;
   return d > 0 ? canLand(x0, Math.min(x0 + AIR, W - PW), Q) : canLand(Math.max(x0 - AIR, 0), x0, Q); }
 function reachable(P, Q) { return reachSide(P, Q, 1) || reachSide(P, Q, -1); }
 
-function makeGen(seed) { return { rng: mulberry32(seed), n: 0, prev: { x: (W - PLAT_W) / 2, type: 'normal' }, queue: [], spikeAt: 1, fallbacks: 0 }; }
+function makeGen(seed, every = DRAGON_EVERY) { return { rng: mulberry32(seed), every, n: 0, prev: { x: (W - PLAT_W) / 2, type: 'normal' }, queue: [], spikeAt: 1, fallbacks: 0,
+  mains: [{ x: (W - PLAT_W) / 2, type: 'normal' }], rows: [[{ x: (W - PLAT_W) / 2, type: 'normal' }]], springBlocks: 0, out: 0 }; }
 function pick(g, ok) {
   for (let i = 0; i < 80; i++) { const c = { x: Math.floor(g.rng() * (W - PLAT_W + 1)) }; if (ok(c)) return c; }
   const all = []; for (let x = 0; x <= W - PLAT_W; x++) if (ok({ x })) all.push({ x });
@@ -51,7 +60,8 @@ function spikePair(g, P) {
   }
   return null;
 }
-function nextRow(g) {
+// 主路線：每排 1 塊（跟 v1.2 一樣，保證走得到）
+function nextMain(g) {
   if (g.queue.length) { g.n++; return g.queue.shift(); }
   g.n++;
   const pos = (g.n - 1) % SPIKE_EVERY;
@@ -65,8 +75,112 @@ function nextRow(g) {
   const row = { x: q ? q.x : P.x, type: 'normal' }; if (!q) g.fallbacks++;
   g.prev = row; return row;
 }
-function genRows(seed, n) { const g = makeGen(seed), rows = [{ x: g.prev.x, type: 'normal' }];
-  for (let i = 0; i < n; i++) rows.push(nextRow(g)); return { rows, fallbacks: g.fallbacks }; }
+// v1.3 必死檢查（生成器和遊戲裡的機器人共用的規則）：從平台 X 走到某一邊、離開後往外飄 0..AIR 再直直掉，
+// 往下第一排「靠近」這條路（2 px 內）的平台裡不能有釘板／火焰，且至少一塊一般平台／彈簧重疊 ≥ MIN_OV
+const ovl = (a, p) => Math.min(a + PW, p.x + pw(p)) - Math.max(a, p.x);
+const hurts = p => p.type === 'spike' || p.type === 'fire';   // 會扣血的平台
+function colGood(rowAt, x, i) {
+  for (let j = i + 1; j <= i + 4; j++) {
+    const ps = rowAt(j); if (!ps) return false;
+    const near = ps.filter(p => ovl(x, p) > -2); if (!near.length) continue;
+    return !near.some(hurts) && near.some(p => ovl(x, p) >= MIN_OV) ? j : 0;   // 回傳落在第幾排（0 = 不行）
+  }
+  return false;
+}
+function exitPlan(rowAt, X, i) {   // 回傳 { d, xt }：往 d 走到 xt 放手；null = 沒路
+  for (const d of [1, -1]) {
+    const x0 = dropX(X, d); if (x0 === null) continue;
+    for (let k = 0; k <= AIR; k++) { const x = x0 + d * k; if (x < 0 || x + PW > W) break; const j = colGood(rowAt, x, i); if (j) return { d, xt: x, j }; }
+  }
+  return null;
+}
+function rowAtOf(g) { return j => g.rows[j] || (g.mains[j] && [g.mains[j]]); }
+function ensureMains(g, n) {
+  while (g.mains.length <= n + SPRING_EVERY + 2) g.mains.push(nextMain(g));
+  // 彈簧：每 8 排挑 1 排，那排主平台是一般平台、上下排都不是釘板、上一排不是彈簧
+  while ((g.springBlocks + 1) * SPRING_EVERY + 1 < g.mains.length && g.springBlocks * SPRING_EVERY + 1 <= n + 5) {
+    const b0 = g.springBlocks * SPRING_EVERY + 1, M = g.mains, ok = [];
+    for (let i = b0; i < b0 + SPRING_EVERY; i++) if (M[i].type === 'normal' && M[i - 1].type !== 'spike' && M[i + 1].type !== 'spike' && M[i - 1].type !== 'spring' && i > 1) ok.push(i);
+    if (ok.length) M[ok[Math.floor(g.rng() * ok.length)]].type = 'spring'; else g.fallbacks++;
+    g.springBlocks++;
+  }
+}
+// 第 r 排：主平台 + 40% 機率多一塊一般平台。多的那塊自己要有路，也不能讓上面幾排的平台變成沒路
+function rowsGood(g, r) {   // 第 r-4..r 排每塊平台都有路（往下最多看 4 排，所以改第 r 排會影響到 r-4）
+  const rowAt = rowAtOf(g);
+  for (let i = Math.max(0, r - 4); i <= r; i++) for (const X of rowAt(i)) if (!exitPlan(rowAt, X, i)) return false;
+  return true;
+}
+// 第 r 排：主平台；40% 機率改成 2 塊窄版（主平台縮在原本的範圍內，另一塊至少隔 60 px）。
+// 改完自己要有路，也不能讓上面幾排的平台變成沒路，不行就維持 1 塊。
+// v1.4 火龍前後的排（Yi Way 2026-11-14 決定火焰改成吐火時才點燃畫面上的平台）：火焰不再由生成器預先決定。
+// 為了讓吐火時畫面上有平台可以點，第 100n 層前 4 排到後 18 排（火龍 6 秒內畫面上會出現的排）暫停釘板和彈簧、每排都排 2 塊
+const PREP_A = 4, PREP_B = 18;
+function prepRow(g, r) { const n = Math.floor((r + PREP_A) / g.every), k = r - n * g.every; return n >= 1 && k >= -PREP_A && k <= PREP_B; }
+function decorate(g, r) {
+  ensureMains(g, r + 6);
+  const prep = prepRow(g, r), M = g.mains[r];
+  if (prep && M.type !== 'normal') { M.type = 'normal'; g.paused = (g.paused || 0) + 1; }   // 釘板／彈簧改成一般平台只會讓路更多
+  const one = [{ x: M.x, type: M.type }]; g.rows[r] = one;
+  // 試排 2 塊失敗（排了會讓某塊平台沒路）的次數記成欠帳，下一排補試，讓實際比例維持在 40%
+  if (g.rng() >= (prep ? DRAGON_ROW2_P : ROW2_P) && !(g.debt > 0 && !prep)) return one;
+  for (let t = 0; t < 120; t++) {
+    const mx = M.x + Math.floor(g.rng() * (PLAT_W - PLAT_W2 + 1)), x = Math.floor(g.rng() * (W - PLAT_W2 + 1));
+    if (!(x + PLAT_W2 + ROW2_GAP <= mx || x >= mx + PLAT_W2 + ROW2_GAP)) continue;
+    const two = [{ x: mx, w: PLAT_W2, type: M.type }, { x, w: PLAT_W2, type: 'normal' }].sort((p, q) => p.x - q.x);
+    g.rows[r] = two;
+    if (rowsGood(g, r)) { if (!prep && g.debt > 0) g.debt--; return two; }
+  }
+  g.rows[r] = one; g.row2Miss = (g.row2Miss || 0) + 1; if (!prep) g.debt = (g.debt || 0) + 1;
+  return one;
+}
+// 吐火時挑火焰平台（遊戲和模擬共用）：vis = 畫面上、玩家腳下的排（由上往下）。每排只擲一次 pf；
+// 只挑「2 塊都是一般平台」的排，其中 1 塊著火、另一塊一定安全；著火後第 r-4..r 排每塊都要有路，不然換另一塊、再不行就不點。
+// force = 保底：不管擲過沒有，找到第一塊點得了的就點。excl(q) = 不能點的平台（玩家站著、正要落上去的）
+function chooseFire(g, rng, vis, pf, force, ev, excl) {
+  const out = [];
+  for (const j of vis) {
+    const row = g.rows[j]; if (!row || row.length !== 2 || row.some(p => p.type !== 'normal')) continue;
+    const won = ev.won || (ev.won = new Set());   // 抽中了、但當下來不及點（她可能先落上去）的排：留到下一次再試，不重抽
+    if (!force) { if (ev.rolled.has(j) && !won.has(j)) continue; if (!ev.rolled.has(j)) { ev.rolled.add(j); if (rng() >= pf) continue; } }
+    let late = false;
+    for (const k of rng() < 0.5 ? [0, 1] : [1, 0]) {
+      const q = row[k]; if (excl(q)) { late = true; continue; }
+      q.type = 'fire'; if (rowsGood(g, j)) { out.push(q); ev.fires.push(q); break; } q.type = 'normal';
+    }
+    if (!force) { if (late && !row.some(q => q.type === 'fire')) won.add(j); else won.delete(j); }
+    if (force && out.length) break;
+  }
+  return out;
+}
+const BREATHS = [0, 1, 2].map(i => 1.6 + i * 3.4 / 3);   // 三口火的開始時間（秒，從火龍出現算）
+const fireRngOf = s => mulberry32((s ^ 0x5bd1e995) >>> 0);  // 挑火焰用的亂數另外一串，不影響平台排法
+// 模擬（測試用）：每 every 排一次火龍；玩家在第 R0 = 100n 排落地觸發，假設她一直站在那塊（腳下的排最多）。
+// 她那塊在畫面上的高度依種子隨機（ypl）。第 j 排在 t 秒時的高度 = ypl + (j - R0)×80 − 捲動×t。
+// 每口火開始時，在畫面內（頂刺下 10 px 到畫面底）且在她腳下的排照 chooseFire 挑；第三口還沒火就保底，之後每 0.1 秒再保底一次到 5 秒
+function simRows(seed, N, o = {}) {
+  const every = o.every || DRAGON_EVERY, g = makeGen(seed, o.prepEvery || every), rng = fireRngOf(seed), hr = mulberry32(seed * 7 + 3), events = [];
+  const ensure = j => { while (g.out < j) nextRow(g); };
+  for (let n = 1; n * every + 30 <= N; n++) {
+    const R0 = n * every, pf = o.pf !== undefined ? o.pf : P_FIRE(n), sp = Math.min(SCROLL_MAX, SCROLL0 * (1 + SCROLL_STEP * Math.floor(R0 / 10)));
+    const ypl = CEIL_Y + 40 + hr() * (H - 180 - CEIL_Y), ev = { rolled: new Set(), fires: [] };
+    let tries = 0, retried = false;
+    const at = (t, force) => {
+      const top = ypl - sp * t; ensure(R0 + Math.ceil((H + 2 * GAP - top) / GAP));
+      const vis = []; for (let j = R0 + 1; ; j++) { const y = top + (j - R0) * GAP; if (y >= H - PLAT_H) break; if (y > CEIL_Y + 10) vis.push(j); }
+      tries++; chooseFire(g, rng, vis, pf, force, ev, () => false);
+    };
+    BREATHS.forEach((t, i) => at(t, i === 2 && !ev.fires.length));
+    for (let t = BREATHS[2] + 0.1; t < FORCE_UNTIL && !ev.fires.length; t += 0.1) { retried = true; at(t, true); }
+    events.push({ n, fires: ev.fires.length, retried, firesRows: ev.fires.map(q => g.rows.findIndex(r => r && r.includes(q))) });
+  }
+  ensure(N);
+  return { rows: g.rows.slice(0, N + 1), events, fallbacks: g.fallbacks, row2Miss: g.row2Miss || 0, paused: g.paused || 0 };
+}
+function nextRow(g) { g.out++; return decorate(g, g.out); }   // 回傳一排平台的陣列
+function genRows(seed, n) { const g = makeGen(seed), rows = [g.rows[0]];
+  for (let i = 0; i < n; i++) rows.push(nextRow(g));
+  return { rows, fallbacks: g.fallbacks, row2Miss: g.row2Miss || 0, paused: g.paused || 0 }; }
 
 // ---- 輸入：按住移動、放開停；最後按下的方向優先 ----
 let order = 0;
@@ -83,15 +197,16 @@ function clearInput() { keys.ArrowLeft = keys.ArrowRight = 0; ptrs.clear(); }
 
 // ---- 遊戲狀態 ----
 let mode = 'title', plats = [], player = null, life = START_LIFE, floors = 0, invuln = 0, lastY = 0, nextId = 0;
-let hurtT = 0, streak = 0;   // streak：連續踩到新一般平台的塊數   // 只影響畫面：受傷動作顯示的剩餘秒數
-let gen = null, seed = 0, nextSeed = null, overReason = '', overAt = 0, clock = 0, games = 0;
-const scrollSpeed = () => SCROLL0 * (1 + SCROLL_STEP * Math.floor(floors / 10));
+let balls = [];   // 飛向平台的小火球（火柱碰不到的平台用）
+let hurtT = 0, streak = 0, bgOff = 0, rowN = 0, lastLand = null, dragon = null, dragonDone = 0, dragonLog = [];   // bgOff：背景石牆捲了多遠   // streak：連續踩到新一般平台的塊數   // 只影響畫面：受傷動作顯示的剩餘秒數
+let gen = null, frng = null, seed = 0, nextSeed = null, overReason = '', overAt = 0, clock = 0, games = 0;
+const scrollSpeed = () => Math.min(SCROLL_MAX, SCROLL0 * (1 + SCROLL_STEP * Math.floor(floors / 10)));
 
-function fill() { while (lastY < H + GAP * 2) { const r = nextRow(gen); lastY += GAP; plats.push({ x: r.x, y: lastY, py: lastY, type: r.type, id: ++nextId, row: nextId, visited: false }); } }   // 每排一塊，row = 從起點往下第幾排
+function fill() { while (lastY < H + GAP * 2) { const r = nextRow(gen); lastY += GAP; rowN++; for (const q of r) plats.push({ x: q.x, w: pw(q), y: lastY, py: lastY, type: q.type, id: ++nextId, row: rowN, visited: false, src: q }); } }   // src：生成器裡同一塊（點火時一起改，之後的排才會照著留路）   // 每排 1～2 塊，row = 從起點往下第幾排
 function newGame(s) {
   seed = s !== undefined ? s >>> 0 : nextSeed !== null ? nextSeed : (Math.random() * 2 ** 32) >>> 0; nextSeed = null;
-  gen = makeGen(seed); nextId = 0; lastY = 240;
-  plats = [{ x: gen.prev.x, y: lastY, py: lastY, type: 'normal', id: 0, row: 0, visited: true }];
+  gen = makeGen(seed); frng = fireRngOf(seed); nextId = 0; rowN = 0; lastLand = null; dragon = null; dragonDone = 0; dragonLog = []; balls = []; lastY = 240;
+  plats = [{ x: gen.prev.x, w: PLAT_W, y: lastY, py: lastY, type: 'normal', id: 0, row: 0, visited: true }];
   fill();
   player = { x: W / 2 - PW / 2, y: lastY - GAP * 0 - PH, vy: 0, on: plats[0], ignore: null };
   player.y = plats[0].y - PH;
@@ -102,9 +217,70 @@ function hurt(n) { life = Math.max(0, life - n); hurtT = 0.4; streak = 0; }
 function land(p) {
   const fresh = !p.visited;
   player.on = p; player.vy = 0; player.y = p.y - PH;
-  p.visited = true; floors = Math.max(floors, p.row);   // 層數 = 實際往下到第幾排，跳過的也算；往回不減
-  if (p.type === 'spike') hurt(DMG);
-  else if (fresh && ++streak >= HEAL_STREAK) { streak = 0; life = Math.min(MAX_LIFE, life + HEAL); }
+  p.visited = true; floors = Math.max(floors, p.row); lastLand = p; checkDragon();   // 層數 = 實際往下到第幾排，跳過的也算；往回不減
+  if (hurts(p)) spikeHit();   // 釘板、火焰平台
+  else if (fresh && ++streak >= HEAL_STREAK) { streak = 0; life = Math.min(MAX_LIFE, life + HEAL); }   // 彈簧也算一般平台
+  if (p.type === 'spring') { player.on = null; player.vy = -SPRING_V; }   // 彈起來；落回同一塊會再彈
+}
+function spikeHit() { if (invuln <= 0) { hurt(DMG); invuln = HURT_INVULN; } }   // 釘板／火焰：扣 1、閃 1.0 秒；閃完還站著就再扣
+// v1.4 火龍：樓層第一次到 100、200… 時出現（背景，沒有碰撞）
+function checkDragon() {
+  const n = Math.floor(floors / DRAGON_EVERY);
+  if (n > dragonDone) { dragonDone = n; startDragon(n, (seed + n) & 1 ? 1 : -1); dragonLog.push(n); }   // 左右用種子決定，不動到平台亂數
+}
+function startDragon(n, side) { dragon = { n, t0: clock, side, nb: 0, lastTry: 0, ev: { rolled: new Set(), fires: [] } }; }
+// 吐火時點火：每口火開始時從畫面上的平台挑（chooseFire），第三口還沒有火就保底，之後每 0.1 秒再保底到 5.6 秒（火龍退回牆裡途中也會吐火球）
+const FORCE_UNTIL = 5.6;
+function dragonFire() {
+  const t = clock - dragon.t0;
+  if (dragon.nb < 3 && t >= BREATHS[dragon.nb]) { const i = dragon.nb++; pickFire(i === 2 && !dragon.ev.fires.length); }
+  else if (dragon.nb >= 3 && t < FORCE_UNTIL && !dragon.ev.fires.length && t - dragon.lastTry >= 0.1) { dragon.lastTry = t; pickFire(true); }
+}
+const IGN_FLASH = 0.1, IGN_SPROUT = 0.3;   // 點燃動畫：閃白 0.1 秒 → 冒火苗 3 格（0.3 秒）→ 持續燃燒。閃完才算火焰（開始扣血）
+// 火柱的錐形（跟 COL 預畫的形狀同一組數字）：點 (x, y) 在不在長 L 的火柱裡；回傳沿火柱的距離 u，不在就 -1
+function inColumn(m, dir, x, y, L = 140) {
+  const cs = Math.cos(COL_ANG), sn = Math.sin(COL_ANG), dx = (x - m[0]) * dir, dy = y - m[1], u = dx * cs + dy * sn, v = -dx * sn + dy * cs;
+  if (u < 6 || u > L - 8) return -1;   // 尾端碎開的那段不算碰到
+  const hw = Math.min(4 + 16 * Math.pow(u / L, 0.85), 2 + u * 0.4) - 3;   // 扣掉晃動，確定真的蓋到
+  return Math.abs(v) <= hw ? u : -1;
+}
+const BALL_T = [0.3, 0.6];   // 火球飛行時間（秒）：近的 0.3、遠的 0.6
+const ballT = (a, b) => BALL_T[0] + (BALL_T[1] - BALL_T[0]) * Math.min(1, Math.hypot(b[0] - a[0], b[1] - a[1]) / 420);
+// 她最快多久能落到 p 上：垂直（從現在的速度往下掉、加上平台往上捲的接近速度）跟水平（走過去）取比較慢的那個
+function reachTime(p) {
+  const feet = player.y + PH, dy = p.y - feet; if (dy <= 0) return 0;
+  const sp = scrollSpeed(), v0 = (player.on ? 0 : Math.max(0, player.vy)) + sp, on = player.on;
+  const leave = on ? Math.min(player.x + PW - on.x, on.x + pw(on) - player.x) / MOVE : 0;   // 站著的話要先走出自己的平台才會開始掉
+  let t = leave, y = 0, v = v0; while (y < dy && t < 5) { t += 1 / 240; v = Math.min(MAX_FALL + sp, v + GRAV / 240); y += v / 240; }
+  const hx = Math.max(0, Math.max(p.x - (player.x + PW), player.x - (p.x + pw(p))) - AIR);
+  return Math.max(t, hx / MOVE);
+}
+// 吐火時點火：從畫面內、她腳下的一般平台挑（chooseFire）。火柱噴滿時碰得到的直接點（火柱前緣到的那一刻）；碰不到的從嘴吐一顆小火球飛過去，落地才點。
+// 點燃（閃白結束）一定要比她最快落上去的時間早 0.1 秒以上，來不及的平台不挑
+function pickFire(force) {
+  const cur = player.on ? player.on.row : lastLand ? lastLand.row : 0, feet = player.y + PH, t = clock - dragon.t0;
+  const vis = [...new Set(plats.filter(p => p.row > cur && p.y > feet + 2 && p.y > CEIL_Y + 10 && p.y < H - PLAT_H && p.src).map(p => p.row))].sort((a, b) => a - b);   // 畫面內、她腳下的排
+  const byQ = q => plats.find(p => p.src === q), R = dragon.side > 0, dir = R ? -1 : 1, sp = scrollSpeed();
+  const k = (t - 1.6) % (3.4 / 3), breathing = t >= 1.6 && t < 5 && k < 0.9;
+  const colAt = breathing ? clock + Math.max(0, 0.25 - k) : -1;   // 火柱開始噴的時間（-1 = 這時候沒在吐火）
+  const mouth = dragonMouth(3);
+  const plan = q => {   // 這塊怎麼點、什麼時候點
+    const p = byQ(q); if (!p) return null;
+    if (colAt >= 0) for (let i = 0; i <= 4; i++) {   // 火柱前緣每 0.05 秒長 28 px
+      const at = colAt + 0.05 * i, y = p.y - sp * (at - clock);
+      for (let x = p.x + 3; x <= p.x + pw(p) - 3; x += 3) { const u = inColumn(mouth, dir, x, y + 2, COL_L[i]); if (u >= 0) return { how: 'col', at }; }
+    }
+    const go = breathing && k < 0.12 ? clock + 0.12 - k : clock, from = dragonMouth(dragonPose(go - dragon.t0).f);   // 火球：蓄力到一半（喉嚨亮起來後）從嘴吐出；其他時候馬上吐
+    const fy = p.y - sp * (go - clock), ft = force ? BALL_T[0] : ballT(from, [p.x + pw(p) / 2, fy]);   // 保底的火球用最快的 0.3 秒（不然她離最近的平台太近時永遠來不及）
+    return { how: 'ball', at: go + ft, go, from, ft };
+  };
+  const excl = q => { const p = byQ(q); if (!p || p === player.on) return true; const pl = plan(q); return !pl || pl.at + IGN_FLASH > clock + reachTime(p) - 0.05; };   // 點燃（閃白結束）要比她最快落上去早 0.05 秒以上
+  let n = 0;
+  for (const q of chooseFire(gen, frng, vis, P_FIRE(dragon.n), force, dragon.ev, excl)) {
+    const p = byQ(q), pl = plan(q); p.ev = dragon.ev; p.how = pl.how;
+    if (pl.how === 'col') p.igniteAt = pl.at;
+    else { p.igniteAt = pl.at + 0.04 * n; balls.push({ p, go: pl.go + 0.04 * n, at: pl.at + 0.04 * n, from: pl.from, dir }); n++; }   // 好幾顆時一顆接一顆吐
+  }
 }
 function gameOver(why) { mode = 'over'; overReason = why; overAt = clock; }
 
@@ -115,27 +291,34 @@ function step(dt) {
   for (const p of plats) { p.py = p.y; p.y -= sp * dt; }
   lastY -= sp * dt;
   while (plats.length && plats[0].y + PLAT_H < 0) plats.shift();
+  if (dragon && clock - dragon.t0 >= DRAGON_T) dragon = null;
   fill();
-  invuln = Math.max(0, invuln - dt); hurtT = Math.max(0, hurtT - dt);
+  if (dragon) dragonFire();
+  balls = balls.filter(b => clock < b.at && b.p.igniteAt && plats.includes(b.p));   // 火球落地（或平台捲出畫面）就消失
+  for (const p of plats) if (p.igniteAt && !p.lit && clock >= p.igniteAt + IGN_FLASH) {
+    if (player.on === p) { p.src.type = 'normal'; p.igniteAt = 0; p.how = ''; const f = p.ev.fires; f.splice(f.indexOf(p.src), 1); }   // 她剛好站上去：取消（改回一般平台一定還有路），保底會再挑
+    else { p.type = 'fire'; p.lit = clock; }
+  }
+  invuln = Math.max(0, invuln - dt); hurtT = Math.max(0, hurtT - dt); bgOff += sp * dt;
   player.x = Math.min(W - PW, Math.max(0, player.x + inputDir() * MOVE * dt));
   const on = player.on;
   if (on) {
-    if (player.x + PW <= on.x || player.x >= on.x + PLAT_W) { player.on = null; player.vy = 0; }
-    else player.y = on.y - PH;
+    if (player.x + PW <= on.x || player.x >= on.x + pw(on)) { player.on = null; player.vy = 0; }
+    else { player.y = on.y - PH; if (hurts(on)) spikeHit(); }
   }
   if (!player.on) {
     const pb = player.y + PH;
     player.vy = Math.min(MAX_FALL, player.vy + GRAV * dt);
     player.y += player.vy * dt;
     const nb = player.y + PH;
-    for (const p of plats) {   // 由上往下找第一塊穿過的平台
+    if (player.vy > 0) for (const p of plats) {   // 往下掉時才會落地（彈簧往上彈時穿過去）；由上往下找第一塊穿過的平台
       if (p === player.ignore) continue;
-      if (player.x < p.x + PLAT_W && player.x + PW > p.x && pb <= p.py + 0.001 && nb >= p.y) { land(p); break; }
+      if (player.x < p.x + pw(p) && player.x + PW > p.x && pb <= p.py + 0.001 && nb >= p.y) { land(p); break; }
     }
   }
   if (player.y < CEIL_Y) {     // 頂部尖刺
     player.y = CEIL_Y;
-    if (invuln <= 0) { hurt(DMG); invuln = CEIL_INVULN; }
+    if (invuln <= 0) { hurt(DMG); invuln = HURT_INVULN; }
     if (player.on) { player.ignore = player.on; player.on = null; }
     player.vy = Math.max(player.vy, CEIL_PUSH);
   }
@@ -145,184 +328,482 @@ function step(dt) {
 
 // ---- 畫面 ----
 // ---- 像素圖（1 美術像素 = 2×2 遊戲像素；'.' = 透明）----
-const PAL = {
-  K: '#1c1418', H: '#55331f', S: '#f2c39b', F: '#de8f74', N: '#2c4590', O: '#ea8a2a', P: '#e8ddc3', Q: '#b9a787',
-  R: '#cc3340', W: '#ffffff', T: '#2a9e9c', L: '#7fded3', D: '#14575b', G: '#2d313b', M: '#5d6474',
+const PAL = {   // 角色和平台共用色盤（24 色以內）；背景另有自己的色盤 BGPAL
+  K: '#1e1612', H: '#4e3426', S: '#f2b48c', F: '#cf8766', W: '#ffffff', N: '#25396a', O: '#d0782a', P: '#e9d4c0',
+  Q: '#b59d89', R: '#c23b3c', M: '#5d6474', T: '#2a9e9c', L: '#7fded3', D: '#14575b', G: '#2d313b', h: '#7a5038',
+  f: '#e88a7c', n: '#172447', U: '#3a55a0', o: '#8f4a1c', r: '#82232c', Y: '#ffd060', w: '#fff4b0', A: '#ff8a20',
 };
+// 全部 1 美術像素 = 1 遊戲像素；女孩 32×40（art-src/girl32b.py 產生，參考 concept_character.jpg）
 const SPR = {
-  stand: [   // 20×26，1 美術像素 = 1 遊戲像素
-    '........KKKK........',
-    '.......KHHKKK.......',
-    '........KNNK........',
-    '.....KKKKKKKKKK.....',
-    '....KHHKKKKKKKKK....',
-    '...KHKKKKKKKKKKHK...',
-    '...KKKSSKKKKSSKKK...',
-    '..KKSSSSSSKSSSSSKK..',
-    '.SKSSKKSSSSSSKKSSKS.',
-    '.SKSSWKSSSSSSWKSSKS.',
-    '..KFSKKSSSSSSKKSFK..',
-    '...KSSSSSRRSSSSSK...',
-    '....KKSSSSSSSSKK....',
-    '.....NNNNNNNNNN.....',
-    '....SNNNNNNNNOOS....',
-    '....SNNNNNNNNOOS....',
-    '....SNNNNNNNNNNS....',
-    '.....PPPPPPPPPP.....',
-    '.....PPPPQQPPPP.....',
-    '.....PPPP..PPPP.....',
-    '.....QPPQ..QPPQ.....',
-    '....RWWR...RWWR.....',
-    '....RWRWR..RWRWR....',
-    '....RWWRR..RWWRR....',
-    '....RWRWR..RWRWR....',
-    '....RWWRR..RWWRR....',
+  stand32: [
+    '.............KKhKKK.............',
+    '............KKHhHHKK............',
+    '............KKHKKHKK............',
+    '...........KKKKnnKKKK...........',
+    '..........KKKhhKKKKKKK..........',
+    '.........KKKhHKKKhHHKKK.........',
+    '........KKKhKKKKKKKHHKKK........',
+    '........KKHKKKKKKKKKKHKK........',
+    '.......KKKKKSSKKKKSSKKKKK.......',
+    '.......KKKSSSSSKKSSSSSKKK.......',
+    '.......KKSSSSSSSSSSSSSSKK.......',
+    '.......KKSSKKSSSSSSKKSSKK.......',
+    '......KSKSSKWSSSSSSKWSSKSK......',
+    '......KSKSSHKSSSSSSHKSSKSK......',
+    '.......KKfSSSSSSSSSSSSfKK.......',
+    '.......KKSSSSSSRRSSSSSFKK.......',
+    '........KKKSSFSSSSFSFKKK........',
+    '.........KUUUUnFFUnUUnK.........',
+    '........KUNNNNNUUNNNNNnK........',
+    '.......KUNNNNNNNNNNNNNNnK.......',
+    '.......KnNNNNNNNNNNNNNNnK.......',
+    '.......KSNNNNNNNNNOONNnSK.......',
+    '.......KSNNNNNNNNNOoUNnSK.......',
+    '.......KSNNNNNNNNNNUNNnSK.......',
+    '.......KSNNNNNNNNNNNNNnSK.......',
+    '.......KSSnnnnnnnnnnnnSSK.......',
+    '........KKPPPPPWWPPPPQKK........',
+    '.........KPPPPWPPWPPPQK.........',
+    '.........KPPPPPPPPPPPQK.........',
+    '.........KPPPPPPPPPPPQK.........',
+    '.........KPPPPQQQPPPPQK.........',
+    '.........KPQPPQKKPPPQQK.........',
+    '.........KPPPPQKKPPPPQK.........',
+    '.........KPPPQQKKPQPPQK.........',
+    '.........KPPPPQKKPPPPQK.........',
+    '.........KQPPPQKKPPPQQK.........',
+    '.........KQQQQQKKQQQQQK.........',
+    '........KRWRWRRKKRWRWRRK........',
+    '........KRRRRRrKKRRRRRrK........',
+    '........KWWWWWWKKWWWWWWK........',
   ],
-  walk1: [   // 20×26，1 美術像素 = 1 遊戲像素
-    '....KKKK............',
-    '...KHHKKK...........',
-    '....KKNK............',
-    '....KKKKKKKKKK......',
-    '...KHHKKKKKKKKK.....',
-    '..KHKKKKKKKKKKKK....',
-    '..KKKKKKKKKKKSSKK...',
-    '..KKKKKKKSSSSSSSK...',
-    '..KKKKKSSSSSKKSSSK..',
-    '..KKKKSSSSSSWKSSSS..',
-    '..KKKKSFSSSSKKSFSK..',
-    '...KKKSSSSSSSSRSK...',
-    '....KKKSSSSSSSKK....',
-    '.......NNNNNNN......',
-    '......SNNNNNOOS.....',
-    '.....S.NNNNNOO.S....',
-    '.......NNNNNNN......',
-    '.......PPPPPPP......',
-    '......PPPPPPPPP.....',
-    '.....PPPP..PPPP.....',
-    '....QPPP....PPPQ....',
-    '...RWWR......RWWRR..',
-    '...RWRWR.....RWRWRR.',
-    '...RWWRR.....RWWRRR.',
-    '...RWRWR.....RWRWRR.',
-    '...RWWRR.....RWWRRR.',
+  walk132: [
+    '..........KKhKKK................',
+    '.........KKHHKKKK...............',
+    '.........KKHKKKKK...............',
+    '..........KKKnnKKKKKK...........',
+    '..........KKKKhhKKKKKK..........',
+    '.........KKKKhHKKKhKKKK.........',
+    '........KKKHhKKKKKKKKKKK........',
+    '........KKHKKKKKKKKKKKKKK.......',
+    '.......KKKKKKKKKKKKKSSKKK.......',
+    '.......KKKKKKKKKKSSSSSSKK.......',
+    '.......KKKKKKKKSSSSSSSSSKK......',
+    '.......KKKKKKKSSSSSSKKSSSK......',
+    '.......KKKKKKSSSSSSSKWSSSSK.....',
+    '.......KKKKKSFSSSSSSHKSSSSK.....',
+    '.......KKKKKSSSSSSSSSfFSFK......',
+    '........KKKKKSSSSSSSSSFRKK......',
+    '.........KKKKKSFSSSSSKKKK.......',
+    '..........KKUUUUUUnKKKK.........',
+    '..........KUNNNNNNNnK...........',
+    '.........KUNNNNNNOONnK..........',
+    '.........KUNNNNNNOoUnK..........',
+    '........KSSNNNNNNNUnSSK.........',
+    '.......KSSKUNNNNNNNnKSSK........',
+    '.......KSKKnNNNNNNNnKKSSK.......',
+    '........K..KUNNNNNNnK.KK........',
+    '...........KnnnnnnnK............',
+    '...........KPPPPPPPQK...........',
+    '..........KPPPPWPPPPQK..........',
+    '..........KPPPPPPPPPQK..........',
+    '.........KPPPPPPPPPPPQK.........',
+    '.........KPPPPQKKPPPPPQK........',
+    '........KPPPPQK..KPPPPQK........',
+    '.......KPPPPQK....KPPPPQK.......',
+    '......KPPPPQK......KPPPPQK......',
+    '.....KQPPPQK........KPPPQQK.....',
+    '.....KQQPQK..........KPQQQK.....',
+    '...KKQQQQK............KQQQQKK...',
+    '..KRWRWRWRK..........KRWRWRWRK..',
+    '..KRRRRRRRK..........KRRRRRRRK..',
+    '..KWWWWWWWK..........KWWWWWWWK..',
   ],
-  walk2: [   // 20×26，1 美術像素 = 1 遊戲像素
-    '....KKKK............',
-    '...KHHKKK...........',
-    '....KKNK............',
-    '....KKKKKKKKKK......',
-    '...KHHKKKKKKKKK.....',
-    '..KHKKKKKKKKKKKK....',
-    '..KKKKKKKKKKKSSKK...',
-    '..KKKKKKKSSSSSSSK...',
-    '..KKKKKSSSSSKKSSSK..',
-    '..KKKKSSSSSSWKSSSS..',
-    '..KKKKSFSSSSKKSFSK..',
-    '...KKKSSSSSSSSRSK...',
-    '....KKKSSSSSSSKK....',
-    '.......NNNNNNN......',
-    '.......NNNNNOOS.....',
-    '.......NSNNNOO......',
-    '.......NNNNNNN......',
-    '.......PPPPPPP......',
-    '.......PPPPPPP......',
-    '........PPPPP.......',
-    '........QPPPQ.......',
-    '........RWWRR.......',
-    '........RWRWRR......',
-    '........RWWRRR......',
-    '........RWRWRR......',
-    '........RWWRRR......',
+  walk232: [
+    '..........KKhKKK................',
+    '.........KKHHKKKK...............',
+    '.........KKHKKKKK...............',
+    '..........KKKnnKKKKKK...........',
+    '..........KKKKhhKKKKKK..........',
+    '.........KKKKhHKKKhKKKK.........',
+    '........KKKHhKKKKKKKKKKK........',
+    '........KKHKKKKKKKKKKKKKK.......',
+    '.......KKKKKKKKKKKKKSSKKK.......',
+    '.......KKKKKKKKKKSSSSSSKK.......',
+    '.......KKKKKKKKSSSSSSSSSKK......',
+    '.......KKKKKKKSSSSSSKKSSSK......',
+    '.......KKKKKKSSSSSSSKWSSSSK.....',
+    '.......KKKKKSFSSSSSSHKSSSSK.....',
+    '.......KKKKKSSSSSSSSSfFSFK......',
+    '........KKKKKSSSSSSSSSFRKK......',
+    '.........KKKKKSFSSSSSKKKK.......',
+    '..........KKUUUUUUnKKKK.........',
+    '..........KUNNNNNNNnK...........',
+    '..........KUNNNNNOONnK..........',
+    '..........KUNNNNNOoUnK..........',
+    '.........KSNNNNNNNUnSK..........',
+    '.........KSNNNNNNNNnSK..........',
+    '.........KSSNNNNNNnSSK..........',
+    '..........KKUNNNNNNnK...........',
+    '...........KnnnnnnnK............',
+    '...........KPPPPPPPQK...........',
+    '...........KPPPWPPPQK...........',
+    '...........KPPPPPPPQK...........',
+    '..........KPPPPPPPPQK...........',
+    '..........KPPPPPPPPQK...........',
+    '..........KPPPQKPPPPQK..........',
+    '..........KPPPQKKPPPQK..........',
+    '..........KQPPQKKPPPQQK.........',
+    '..........KQPPQK.KPPQQK.........',
+    '..........KQQPQK.KPQQQK.........',
+    '.........KKQQQQK.KQQQQKK........',
+    '........KRWRWRRKKRWRWRWRK.......',
+    '........KRRRRRRKKRRRRRRRK.......',
+    '........KWWWWWWKKWWWWWWWK.......',
   ],
-  fall: [   // 20×26，1 美術像素 = 1 遊戲像素
-    '........KKKK........',
-    '..S....KHHKKK....S..',
-    '.SS.....KNNK.....SS.',
-    '.SS..KKKKKKKKKK..SS.',
-    '..S.KHHKKKKKKKKK.S..',
-    '..NKHKKKKKKKKKKHKN..',
-    '..NKKKSSKKKKSSKKKN..',
-    '..KKSSSSSSKSSSSSKK..',
-    '.SKSSKKSSSSSSKKSSKS.',
-    '.SKSSWKSSSSSSWKSSKS.',
-    '..KFSKKSSSSSSKKSFK..',
-    '...KSSSSSRRSSSSSK...',
-    '....KKSSSRRSSSKK....',
-    '.....NNNNNNNNNN.....',
-    '.....NNNNNNNNOO.....',
-    '.....NNNNNNNNOO.....',
-    '.....NNNNNNNNNN.....',
-    '.....PPPPPPPPPP.....',
-    '....PPPPPQQPPPPP....',
-    '...PPPPP....PPPPP...',
-    '...QPPQ......QPPQ...',
-    '..RWWR........RWWR..',
-    '..RWRWR......RWRWR..',
-    '..RWWRR......RWWRR..',
-    '..RWRWR......RWRWR..',
-    '..RWWRR......RWWRR..',
+  fall32: [
+    '................................',
+    '................................',
+    '................................',
+    '..............KKKK..............',
+    '.............KKhKKK.............',
+    '.KKK........KKHhHHKK........KKK.',
+    'KSSSK.......KKHKKHKK.......KSSSK',
+    '.KSSK......KKKKnnKKKK......KSSK.',
+    '..KSSK....KKKhhKKKKKKK....KSSK..',
+    '..KSSK...KKKhHKKKhHHKKK...KSSK..',
+    '..KSSK..KKKhKKKKKKKHHKKK..KSSK..',
+    '...KSSK.KKHKKKKKKKKKKHKK.KSSK...',
+    '...KSSKKKKKKSSKKKKSSKKKKKKSSK...',
+    '....KSSKKKSSSSSKKSSSSSKKKSSK....',
+    '....KSSKKSSSSSSSSSSSSSSKKSSK....',
+    '....KSSKKSSKKSSSSSSKKSSKKSSK....',
+    '.....KSSKSSKWSSSSSSKWSSKSSK.....',
+    '.....KSSKSSHKSSSSSSHKSSKSSK.....',
+    '......KSFfSSSSSSSSSSSSfSFK......',
+    '......KnnSSSSSSRRSSSSSFUnK......',
+    '.......KnnKSSFFRRSFSFKnnK.......',
+    '........KKUUUUnFFUUUUnKK........',
+    '........KUNNNNNUUNNNNNnK........',
+    '........KUNNNNNNNNNNNNnK........',
+    '........KUNNNNNNNNOONNnK........',
+    '........KUNNNNNNNNOoUNnK........',
+    '........KUNNNNNNNNNUNNnK........',
+    '........KnnnnnnnnnnnnnnK........',
+    '........KPPPPPPWWPPPPPQK........',
+    '.......KPPPPPPPPPPPPPPPQK.......',
+    '......KPPPPPPPQQQPPPPPPPQK......',
+    '.....KPPPPPPQKKKKKKPPPPPPQK.....',
+    '....KPPPPPQKK......KKPPPPPQK....',
+    '....KPPPPQK..........KPPPPQK....',
+    '....KQPPPQK..........KPPPQQK....',
+    '....KQQPQK............KPQQQK....',
+    '....KQQQKK............KKQQQK....',
+    '...KRWRWRRK..........KRWRWRRK...',
+    '...KRRRRRrK..........KRRRRRRK...',
+    '...KWWWWWWK..........KWWWWWWK...',
   ],
-  hurt: [   // 20×26，1 美術像素 = 1 遊戲像素
-    '....................',
-    '........KKKK........',
-    '.......KHHKKK.......',
-    '........KNNK........',
-    '.....KKKKKKKKKK.....',
-    '....KHHKKKKKKKKK....',
-    '...KHKKKKKKKKKKHK...',
-    '...KKKSSKKKKSSKKK...',
-    '..KKSSSSSSKSSSSSKK..',
-    '.SKSKSSSSSSSSSSKSKS.',
-    '.SKSSKKSSSSSSKKSSKS.',
-    '..KFSSSSSSSSSSSSFK..',
-    '...KSSSSKKKKSSSSK...',
-    '....KKSSSSSSSSKK....',
-    '....NNNNNNNNNNNN....',
-    '...NNSSSSSSSSOONN...',
-    '....NNNNNNNNNNNN....',
-    '.....PPPPPPPPPP.....',
-    '....PPPPPQQPPPPP....',
-    '....PPPP....PPPP....',
-    '....QPPQ....QPPQ....',
-    '....RWWR....RWWR....',
-    '....RWRWR...RWRWR...',
-    '....RWWRR...RWWRR...',
-    '....RWRWR...RWRWR...',
-    '....RWWRR...RWWRR...',
+  hurt32: [
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '..............KKKK..............',
+    '.............KKhKKK.............',
+    '............KKHhHHKK............',
+    '............KKHKKHKK............',
+    '...........KKKKnnKKKK...........',
+    '..........KKKhhKKKKKKK..........',
+    '.........KKKhHKKKhHHKKK.........',
+    '........KKKhKKKKKKKHHKKK........',
+    '........KKHKKKKKKKKKKHKK........',
+    '.......KKKKKSSKKKKSSKKKKK.......',
+    '.......KKKSSSSSKKSSSSSKKK.......',
+    '.......KKSSSSSSSSSSSSSSKK.......',
+    '.......KKSSSSSSSSSSSSSSKK.......',
+    '......KSKSKKKSSSSSKKKSSKSK......',
+    '......KSKSSSSSSSSSSSSSSKSK......',
+    '.......KKfSSSSSSSSSSSSfKK.......',
+    '.......KKSSSSSSKKSSSSSFKK.......',
+    '........KKKSSFFRRSFSFKKK........',
+    '.........KUUUUUUUUUUUnK.........',
+    '........KUNNNNNNNNNNnNnK........',
+    '.......KUNNNNNNNNNNOoUNnK.......',
+    '.......KUNNNNNNNNNNNUNNnK.......',
+    '.......KUnSSSSSSSSSSSFNnK.......',
+    '.......KnNnSSSFUnSSSFUNnK.......',
+    '........KnnnnnnnnnnnnnnK........',
+    '........KPPPPPPPPPPPPPQK........',
+    '.......KPPPPPPPPPPPPPPPQK.......',
+    '.......KPPPPPPQQQPPPPPPQK.......',
+    '.......KPPPPQKKKKKKPPPPQK.......',
+    '.......KQPPPQK....KPPPQQK.......',
+    '.......KQQQQK......KQQQQK.......',
+    '......KRWRWRRK....KRWRWRRK......',
+    '......KRRRRRrK....KRRRRRrK......',
+    '......KWWWWWWK....KWWWWWWK......',
   ],
   heart: [
-    '.RR.RR.',
-    'RWRRRRR',
-    'RRRRRRR',
-    '.RRRRR.',
-    '..RRR..',
-    '...R...',
+    '.RRR...RRR.',
+    'RRWRR.RRRRR',
+    'RWRRRRRRRRR',
+    'RRRRRRRRRRR',
+    'RRRRRRRRRRR',
+    '.RRRRRRRRR.',
+    '..RRRRRRR..',
+    '...RRRRR...',
+    '....RRR....',
+    '.....R.....',
   ],
   heart0: [
-    '.MM.MM.',
-    'MGGMGGM',
-    'MGGGGGM',
-    '.MGGGM.',
-    '..MGM..',
-    '...M...',
+    '.MMM...MMM.',
+    'MGGGM.MGGGM',
+    'MGGGGMGGGGM',
+    'MGGGGGGGGGM',
+    'MGGGGGGGGGM',
+    '.MGGGGGGGM.',
+    '..MGGGGGM..',
+    '...MGGGM...',
+    '....MGM....',
+    '.....M.....',
   ],
   plat: [
-    '.LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL.',
-    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
-    'LTTLTTTTTTTTLTTTTTTTTLTTTTTTTTLTTTTTTTTLTTTTD',
-    'LTTDTTTTTTTTDTTTTTTTTDTTTTTTTTDTTTTTTTTDTTTTD',
-    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
-    '.DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD.',
+    '.LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL.',
+    'LLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'LTTTTTTLLTTTTTTTTTTTTTLLTTTTTTTTTTTTTLLTTTTTTTTTTTTTLLTTTTTTTTTTTTTLLTTTTTTD',
+    'LTTTTTTLDTTTTTTTTTTTTTLDTTTTTTTTTTTTTLDTTTTTTTTTTTTTLDTTTTTTTTTTTTTLDTTTTTTD',
+    'LTTTTTTDDTTTTTTTTTTTTTDDTTTTTTTTTTTTTDDTTTTTTTTTTTTTDDTTTTTTTTTTTTTDDTTTTTTD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD',
+    '.KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK.',
   ],
   spike: [
-    '..R....R....R....R....R....R....R....R....R..',
-    '..R....R....R....R....R....R....R....R....R..',
-    '.RRR..RRR..RRR..RRR..RRR..RRR..RRR..RRR..RRR.',
-    '.MMG..MMG..MMG..MMG..MMG..MMG..MMG..MMG..MMG.',
-    'MMMGGMMMGGMMMGGMMMGGMMMGGMMMGGMMMGGMMMGGMMMGG',
-    'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM',
-    'GGMGGGGGMGGGGGMGGGGGMGGGGGMGGGGGMGGGGGMGGGGGM',
-    'KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK',
+    '............................................................................',
+    '.......RR........RR........RR........RR........RR........RR........RR.......',
+    '.......RR........RR........RR........RR........RR........RR........RR.......',
+    '......RRRR......RRRR......RRRR......RRRR......RRRR......RRRR......RRRR......',
+    '......RRRR......RRRR......RRRR......RRRR......RRRR......RRRR......RRRR......',
+    '.....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG.....',
+    '.....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG.....',
+    '.....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG.....',
+    '....MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG....',
+    '....MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG....',
+    '...MMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGG...',
+    '...MMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGG...',
+    'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM',
+    'GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG',
+    'GGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGM',
+    'KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK',
+  ],
+  spring: [
+    '.PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP.',
+    'OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOo',
+    'OOOOOOOOoOOOOOOOoOOOOOOOoOOOOOOOoOOOOOOOoOOOOOOOoOOOOOOOoOOOOOOOoOOOOOOOoOOo',
+    '.oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo.',
+    '......WWWWQQQQMMM.......WWWWQQQQMMM.......WWWWQQQQMMM.......WWWWQQQQMMM.....',
+    '......Q.........G.......Q.........G.......Q.........G.......Q.........G.....',
+    '......WWWWQQQQMMM.......WWWWQQQQMMM.......WWWWQQQQMMM.......WWWWQQQQMMM.....',
+    '......Q.........G.......Q.........G.......Q.........G.......Q.........G.....',
+    '......WWWWQQQQMMM.......WWWWQQQQMMM.......WWWWQQQQMMM.......WWWWQQQQMMM.....',
+    '......Q.........G.......Q.........G.......Q.........G.......Q.........G.....',
+    '......WWWWQQQQMMM.......WWWWQQQQMMM.......WWWWQQQQMMM.......WWWWQQQQMMM.....',
+    '......Q.........G.......Q.........G.......Q.........G.......Q.........G.....',
+    'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM',
+    'GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG',
+    'GGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGM',
+    'KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK',
+  ],
+  ceil: [
+    'RRRRRRRRRRRR',
+    '.RRRRRRRRRK.',
+    '.RRRRRRRRRK.',
+    '..RRRRRRRK..',
+    '..RRRRRRRK..',
+    '...RRRRRK...',
+    '...RRRRRK...',
+    '....RRRK....',
+    '....RRRK....',
+    '.....RK.....',
+    '.....RK.....',
+    '.....R......',
+    '............',
+    '............',
+  ],
+  platD: [
+    '.LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL.',
+    'LLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLLTLLLLD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'LTTTTTTLLTTTTTTTTTTTLLTTTTTTTTTTTLLTTTTTTTTTTTLLTTTTTD',
+    'LTTTTTTLDTTTTTTTTTTTLDTTTTTTTTTTTLDTTTTTTTTTTTLDTTTTTD',
+    'LTTTTTTDDTTTTTTTTTTTDDTTTTTTTTTTTDDTTTTTTTTTTTDDTTTTTD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'LTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTD',
+    'DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD',
+    '.KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK.',
+  ],
+  spikeD: [
+    '......................................................',
+    '......RR........RR........RR........RR........RR......',
+    '......RR........RR........RR........RR........RR......',
+    '.....RRRR......RRRR......RRRR......RRRR......RRRR.....',
+    '.....RRRR......RRRR......RRRR......RRRR......RRRR.....',
+    '....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG....',
+    '....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG....',
+    '....MMMGGG....MMMGGG....MMMGGG....MMMGGG....MMMGGG....',
+    '...MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG...',
+    '...MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG..MMMMGGGG...',
+    '..MMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGG..',
+    '..MMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGGMMMMMGGGGG..',
+    'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM',
+    'GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG',
+    'GGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGG',
+    'KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK',
+  ],
+  springD: [
+    '.PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP.',
+    'OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOo',
+    'OOOOOOOOoOOOOOOOoOOOOOOOoOOOOOOOoOOOOOOOoOOOOOOOoOOOOo',
+    '.oooooooooooooooooooooooooooooooooooooooooooooooooooo.',
+    '.........WWWWQQQQMMM...............WWWWQQQQMMM........',
+    '.........Q.........G...............Q.........G........',
+    '.........WWWWQQQQMMM...............WWWWQQQQMMM........',
+    '.........Q.........G...............Q.........G........',
+    '.........WWWWQQQQMMM...............WWWWQQQQMMM........',
+    '.........Q.........G...............Q.........G........',
+    '.........WWWWQQQQMMM...............WWWWQQQQMMM........',
+    '.........Q.........G...............Q.........G........',
+    'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM',
+    'GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG',
+    'GGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGGGMGGGGGGGG',
+    'KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK',
+  ],
+  fire0: [
+    '...................RRR.....................RRR.....................RRR......',
+    '...RRR.............AYA.....RRR.............AYA.....RRR.............AYA......',
+    '...AYA.....RRR....AYwYA....AYA.....RRR....AYwYA....AYA.....RRR....AYwYA.....',
+    '..AYwYA....AYA....AYwYA...AYwYA....AYA....AYwYA...AYwYA....AYA....AYwYA.....',
+    '..AYwYA...AYwYA..AYwwwYA..AYwYA...AYwYA..AYwwwYA..AYwYA...AYwYA..AYwwwYA....',
+    '.AYwwwYA..AYwYA..AYwwwYA.AYwwwYA..AYwYA..AYwwwYA.AYwwwYA..AYwYA..AYwwwYA....',
+    '.YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY.',
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'rrRRRArrRRRrrrrRARrrrRRRrrrARRRrrrRRRrArrRRRrrrRRArrrrRRRrrrARRrrrrRRRrArRRR',
+    'RRArrrRRRrrrRARrrrrRRRrrARRRrrrrRRRArrRRRrrrrRARrrrRRRrrrARRRrrrRRRrArrRRRrr',
+    'rrrRRRrrrrARrrrrRRRrrArRRrrrrRRRArrrRRrrrrRARrrrrRRrrrARRRrrrrRRrArrRRRrrrrR',
+    'rRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRr',
+    'rrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrr',
+    'rrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRR',
+    'RrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrr',
+    'rrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrR',
+    'rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr',
+    '.KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK.',
+  ],
+  fire1: [
+    '..............RRR.....................RRR.....................RRR...........',
+    '..............AYA.....RRR.............AYA.....RRR.............AYA.....RRR...',
+    '......RRR....AYwYA....AYA.....RRR....AYwYA....AYA.....RRR....AYwYA....AYA...',
+    '......AYA....AYwYA...AYwYA....AYA....AYwYA...AYwYA....AYA....AYwYA...AYwYA..',
+    '.....AYwYA..AYwwwYA..AYwYA...AYwYA..AYwwwYA..AYwYA...AYwYA..AYwwwYA..AYwYA..',
+    '.....AYwYA..AYwwwYA.AYwwwYA..AYwYA..AYwwwYA.AYwwwYA..AYwYA..AYwwwYA.AYwwwYA.',
+    '.YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY.',
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'RRRArrrRRRrrrRARrrrrRRRrrARRRrrrrRRRArrRRRrrrrRARrrrRRRrrrARRRrrrRRRrArrRRRr',
+    'ArrrRRRrrrrARRrrrRRRrrArRRRrrrRRRArrrRRRrrrRARrrrrRRRrrARRRrrrrRRRArrRRRrrrr',
+    'rrRRrrrrARRrrrrRRrrArRRRrrrrRRArrrRRRrrrrARrrrrRRRrrArRRrrrrRRRArrrRRrrrrRAR',
+    'RRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrr',
+    'rrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrR',
+    'rRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrr',
+    'rrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrr',
+    'rrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRr',
+    'rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr',
+    '.KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK.',
+  ],
+  fire2: [
+    '.........RRR.....................RRR.....................RRR................',
+    '.........AYA.....RRR.............AYA.....RRR.............AYA.....RRR........',
+    '........AYwYA....AYA.....RRR....AYwYA....AYA.....RRR....AYwYA....AYA........',
+    '........AYwYA...AYwYA....AYA....AYwYA...AYwYA....AYA....AYwYA...AYwYA.......',
+    '.......AYwwwYA..AYwYA...AYwYA..AYwwwYA..AYwYA...AYwYA..AYwwwYA..AYwYA.......',
+    '.......AYwwwYA.AYwwwYA..AYwYA..AYwwwYA.AYwwwYA..AYwYA..AYwwwYA.AYwwwYA......',
+    '.YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY.',
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'RArrrRRRrrrrARRrrrRRRrrArRRRrrrRRRArrrRRRrrrRARrrrrRRRrrARRRrrrrRRRArrRRRrrr',
+    'rrrRRRrrrARRrrrrRRRrArRRRrrrrRRArrrRRRrrrrARRrrrRRRrrArRRRrrrRRRArrrRRRrrrRA',
+    'RRRrrrARRrrrrRRRrArrRRrrrrRRArrrrRRrrrrARRrrrrRRrrArRRRrrrrRRArrrRRRrrrrARrr',
+    'rrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrr',
+    'rrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRr',
+    'RrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrr',
+    'rrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrR',
+    'rRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrr',
+    'rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr',
+    '.KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK.',
+  ],
+  fireD0: [
+    '...................RRR.....................RRR........',
+    '...RRR.............AYA.....RRR.............AYA........',
+    '...AYA.....RRR....AYwYA....AYA.....RRR....AYwYA.......',
+    '..AYwYA....AYA....AYwYA...AYwYA....AYA....AYwYA.......',
+    '..AYwYA...AYwYA..AYwwwYA..AYwYA...AYwYA..AYwwwYA......',
+    '.AYwwwYA..AYwYA..AYwwwYA.AYwwwYA..AYwYA..AYwwwYA......',
+    '.YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY.',
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'rrRRRArrRRRrrrrRARrrrRRRrrrARRRrrrRRRrArrRRRrrrRRArrrr',
+    'RRArrrRRRrrrRARrrrrRRRrrARRRrrrrRRRArrRRRrrrrRARrrrRRR',
+    'rrrRRRrrrrARrrrrRRRrrArRRrrrrRRRArrrRRrrrrRARrrrrRRrrr',
+    'rRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrR',
+    'rrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrr',
+    'rrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrr',
+    'RrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRr',
+    'rrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrr',
+    'rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr',
+    '.KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK.',
+  ],
+  fireD1: [
+    '..............RRR.....................RRR.............',
+    '..............AYA.....RRR.............AYA.....RRR.....',
+    '......RRR....AYwYA....AYA.....RRR....AYwYA....AYA.....',
+    '......AYA....AYwYA...AYwYA....AYA....AYwYA...AYwYA....',
+    '.....AYwYA..AYwwwYA..AYwYA...AYwYA..AYwwwYA..AYwYA....',
+    '.....AYwYA..AYwwwYA.AYwwwYA..AYwYA..AYwwwYA.AYwwwYA...',
+    '.YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY.',
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'RRRArrrRRRrrrRARrrrrRRRrrARRRrrrrRRRArrRRRrrrrRARrrrRR',
+    'ArrrRRRrrrrARRrrrRRRrrArRRRrrrRRRArrrRRRrrrRARrrrrRRRr',
+    'rrRRrrrrARRrrrrRRrrArRRRrrrrRRArrrRRRrrrrARrrrrRRRrrAr',
+    'RRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRR',
+    'rrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrr',
+    'rRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrR',
+    'rrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrr',
+    'rrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrr',
+    'rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr',
+    '.KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK.',
+  ],
+  fireD2: [
+    '.........RRR.....................RRR..................',
+    '.........AYA.....RRR.............AYA.....RRR..........',
+    '........AYwYA....AYA.....RRR....AYwYA....AYA.....RRR..',
+    '........AYwYA...AYwYA....AYA....AYwYA...AYwYA....AYA..',
+    '.......AYwwwYA..AYwYA...AYwYA..AYwwwYA..AYwYA...AYwYA.',
+    '.......AYwwwYA.AYwwwYA..AYwYA..AYwwwYA.AYwwwYA..AYwYA.',
+    '.YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY.',
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'RArrrRRRrrrrARRrrrRRRrrArRRRrrrRRRArrrRRRrrrRARrrrrRRR',
+    'rrrRRRrrrARRrrrrRRRrArRRRrrrrRRArrrRRRrrrrARRrrrRRRrrA',
+    'RRRrrrARRrrrrRRRrArrRRrrrrRRArrrrRRrrrrARRrrrrRRrrArRR',
+    'rrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrrrrRRRrrrrRRrr',
+    'rrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrr',
+    'RrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRrrrrrRRrrrrRRr',
+    'rrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrr',
+    'rRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrRrrrrrRRrrrrrR',
+    'rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr',
+    '.KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK.',
   ],
 };
 // 把字串畫成小畫布（10×13、45×6…），畫的時候再用最近鄰放大 2 倍
@@ -334,6 +815,1388 @@ function bake(rows, flip) {
   return c;
 }
 const IMG = {}; for (const k in SPR) { IMG[k] = bake(SPR[k]); IMG[k + 'L'] = bake(SPR[k], true); }
+// ---- v1.4 火龍 ----
+// 火龍 v13j（art-src/dragon_v6.py：企劃畫、Yi Way 核准的 art/dragon_sprite_v6.jpg，洋紅底扣透明、4 格同比例 0.5 倍縮小、減成 48 色）。動作：0 爬出／抓牆、1 抬頭、2 蓄力、3 吐火；牆在左邊、全身含尾巴
+const DPAL = { a: '#c1532a', b: '#86242e', c: '#911626', d: '#5b152e', e: '#9c0d2c', f: '#730d26', g: '#590d22', h: '#3f0c26', i: '#9f0729', j: '#870725', k: '#750723', l: '#650721', m: '#55071e', n: '#47071d', o: '#3a071e', p: '#2b061b', q: '#9b0326', r: '#8a0323', s: '#7f0321', t: '#75031f', u: '#6a031e', v: '#60031c', w: '#53031b', x: '#45031e', y: '#440314', A: '#390318', B: '#2e031b', C: '#2d0311', D: '#1e0311', E: '#910122', F: '#73001d', G: '#64001b', H: '#59001a', I: '#50001d', J: '#48001d', K: '#4c0015', L: '#3f001b', M: '#3f0013', N: '#36001a', O: '#31001a', P: '#330011', Q: '#2c0017', R: '#270016', S: '#29000e', T: '#200013', U: '#1e000c', V: '#16000d', W: '#0e000a', X: '#fff4b0', Y: '#ffd060', 0: '#ffb040', 1: '#ff8a20', 2: '#e8702a', 3: '#c23b3c', z: '#1a0608' };
+// 每一格的嘴（圖內座標，牆在左；牆在右時 x 鏡像成 寬−1−x）。2 蓄力：上下排牙之間；3 吐火：兩顎之間透空開口最前面那一欄的中間 = 火柱起點。0、1 只是吻的位置（除錯用）
+const DMOUTH = [[52,23],[45,69],[112,114],[134,134]];
+// 每一格眼睛的位置（圖內座標）：火龍的「頭」以吐火格的眼睛為準放在 y = 250
+// 吐火格嘴張開的方向（從兩顎的邊量出來：上顎下緣 22.9°、下顎前緣 61.7° 的角平分線），往中間偏下幾度；牆在右時左右鏡像
+const DCOL_DEG = 42;
+const DEYE = [[66,17],[59,63],[109,91],[125,113]];
+const DRAGON = [
+  [
+    '......................................................................................................................................................................',
+    '..........................................................................................JxJJJJxI....................................................................',
+    '....................................................................................ff...bhddddddxllJx................................................................',
+    '...................................................................................xBoLxxoddbddddhddoRI...............................................................',
+    '........................................................................uJJLJJIIIoohbb33bpdddhBpppppLx................................................................',
+    '.................................................................vII...HjjjbLhdddddddddddTpppppBNxxx..................................................................',
+    '................................................................uefMfskFeiicMhddddbbdhhhhVTpppTL.................I....................................................',
+    '..............................................................ukjejMwFeiEruwPPxAAAxoppphpVVTToLv................foo...................................................',
+    '..................................................wIJH.......tkjjsGHjersFGKKfceccbbdTDTTDWWTL.................IJdho...................................................',
+    '.................................................jkfflv.....GkjjFvkjrjulKKusqqiitGloVVVVVVVN3..............xLxbdhpo...................................................',
+    '................................................GtiiijMH...vtcklGGtsFGHHHkjEEjjjMTTDVVpdddddxoLLLLH...LLLLgddddhhBx...................................................',
+    '...............................................ujeiiijPm..vvcrFFseee3eeeejGuFuvMUDhbbdhbbbbbBphdddddJdddddddddhhBf....................................................',
+    '..............................................kkjrsrEsyywwKfjqeeeiiiiErqqEjstKPSmfJb3bddbbbbbdhbdbbBddbbbbdhhBhoL.....................................................',
+    '.............................................KveErsjeqsGuflluttFuvwKHwKHFjqeuPyleemd333NdbbdbhobbbbBbbbdddhBoooI......................................................',
+    '............................................tusqqjwKHEiiijvIJLxACSPPSUUSPyKHKvjertnhbbbpbbdhdppddddRdddhBBpBBL........................................................',
+    '............................................vkEijKyKKjisjtwyPQTUVb2adUWVUSPMlcctvwApdddTdddhhDThhhhTphhpppppx.........................................................',
+    '...........................................HljqEjGsjktjtsetuMRVWba02bUWVSCMKHvHKLPTDhhhVhhhhpVDppppTRpRpTBIx..........................................................',
+    '..........................................IPlsrjriqisteeiEEqtySUa00abWVPMKwKyyyABTVVpBpVhhppVWVppTTDDTTNRA............................................................',
+    '..........................................JPluuFjiiiieqriiEiiswSSaagUUMmktsKMKMCDVWWDpVWpRDVWWWVDTRRROLI..............................................................',
+    '..........................................JPmwwHGuFsEErjEqiqqiikyMMSPltseeeuFecMQDWWWWWWVVWWWWVVhblf..................................................................',
+    '..........................................xSxLLMyKyyHGuFFFjrEiiiqrttrqiiesseeEjGvgCRBBQpWVWWVTppMur...................................................................',
+    '..........................................NVUUUUUUDDCMMynwGtssriiiiiiqiiEetFFkvf33bdbbbdVVUTTRRBAmGt..................................................................',
+    '...........................................xQTSCPSYbUSPSCCAnmlutrEiiiiiqjtKMKKKKvldodbdddddTTDDTQLglGu................................................................',
+    '............................................INJmlKbdyvfbMSPSCAywHGtEqiqsGyMKMCCPLxoBhdhhddbhhpVVVPwlfkKr..............................................................',
+    '.............................................xPxKKHvHvscKfbMMPUCCAJvukuwPCleHSDUTRTTRhppdddddhphVUMKFjjtH.............................................................',
+    '.............................................LOOAMKIJyKHvjcHblPPUVSAyyMMMPfecfSVVVVVVTDThhhhhhhhWWSLKGsjffu...........................................................',
+    '..............................................xRQCNNAAJIIvvHHvfbgUUUUSSvbKwFrEfyVWWWWWWWTDVDDVDVVVTPyywsEjuk..........................................................',
+    '..............................................vAQOLJLONNNLJJJJwGvlyAwfbjeHAIvketgAWWWWWWVVVVVVUDVVVRCPyHGtkfw.........................................................',
+    '................................................NN...IxJJINALLLJHkuwvtsFFgCOoylfbbQTVWWDRRPAPAAPUWWWDUSPPyMML.........................................................',
+    '................................................II........NCAALLxwkfKwKKHHgSTBoxddbbdVWDRCyHwyJKAVVVUSSCMMMMw.........................................................',
+    '...........................................................lMPAALJHulyMJIGfyUTpBBhhddddDVRJuFvKwmAUBmlyd..............................................................',
+    '.............................................................JMNLLywfwNALwufnVVVTpphhddQDDLGesuwvwASyktsu.............................................................',
+    '...............................................................xALLJHwNTRyHkGyUVVVVTpBhhdWUwrqEGvvnSPljjFj............................................................',
+    '...............................................................lPNALyASUUCMIGfSUCCUUVDDUVWVMjiqEtwmAUyFqett...........................................................',
+    '................................................................lACLLSVTxPPLKgMUPMPPUVVUDDTPKriirtHAUSvtEijG..........................................................',
+    '.................................................................IAAAUBA.fPCPyPSPMMyMUWUSSCALuiiiqGnUUPwtEqkG.......xxOo..............................................',
+    '..................................................................HACUA...yASCSSPPyyyMUVTSPyKKGiiiuwCWUMvtrjk.......LhdddI............................................',
+    '.................................LLJ...............................gRTL....KSCCPPMyMyfPVTSPKGsFEiEGmCVWSMwtssK.......xhdddb...........................................',
+    '...............................bLRoxg...............................Lx......LCPyyyPgufHCUSAwtiiqstsuPWUUSCyvlMl......lNodbfm..........................................',
+    '..............................IOBpdbmI......................................lCPMMMgusjbMVCMGEiiektiryVnySnKyMPI........xBdbbv.........................................',
+    '...............................dOTolekG.....................................lSPyyHftcvvyUSyFiieFjiiEKUwlK3eHvl.........Nphdbdm........................................',
+    '...........................oxxxdQVQmeejI....................................lRPguttuwHfbySytertteiijMUKskG.............Lphdb3hf.......................................',
+    '..........................IhdddLSVTxsieIf....................................NPmulgKwcccySyfuFEiiiiuAUyteFe............LRhdbbho.......................................',
+    '.........................LddbbbfmUTNvieHgv...................................fPyKKKuccc3ySMyvqiiiqjyoUMuEeG............LRhhdbhpI......................................',
+    '........................JOoBoBNfjgSQIEeHofbG..................................QPyvscccaamUPwjiiiijGlyUCHFeeG...........xphhdbhpJ......................................',
+    '.......................fBRpRTTBlieMQJseGPIfkl................................fSnvuccccavUSytqiiiisFfMVUKGseGf..........LpohddhpL......................................',
+    '.......................fQRBODVBIjesyAuqcPLjeMf...............................fSmtFcc3auSSAHriirerqevPVVMKGselM.........xRBohhNMI......................................',
+    '........................NngbQVRLuEeKCwsjPAsjPl...............................fSmkt3acfKbyyuq33uueirKUVUCMwuEmC.........nTppoLfemH.....................................',
+    '........................I...JODOmseuMKtkPAkfPl...............................fSAmyfcvuaaKyui3iereqkMVUoSSAKuJO........JPSSOwbeeII.....................................',
+    '.............................RDQxuqqHKtkPPufPl...............................dPMyKuuccaayAvjri3iskwSVSdPPASyAP.......JofffceirHxJ.....................................',
+    '.............................RVRNvrEHKFkPPufPl..............................MPgusccaaaaaPPwuqiiikMAVVPvlgdmyBN.......JAltjEEsvyvuG....................................',
+    '.............................RVTNItjGKtkymugCl.............................Hwvuucccaa2GnSyHj33EjGHAVWAGjHf.uJJ.......JpLIluvKPmeqtj...................................',
+    '..............................QTBxHkjFtkHfwyL.............................vygtttcc3aabSCyvtqietGjkPVVAvjFl............LCLIIMSmvtqitt..................................',
+    '..............................IRBLvtssskwkwP.............................wKHuuvf3aaafUSwGsEeeGFerHSVUAwtEvI...........PURCPMvsvKsiis..................................',
+    '..............................ITBLtjGjEuHkmL............................lMfsctyyKKGFyUKtEieuHjiEfMUDPAyGeug...........CVTPKfjrvPHriet.................................',
+    '..............................IDRAHjetuHfHxL...........................gMlcccccccaaabCHeqrsfFiiswSVPdPPmtjvM..........QVovkFusvCLHriet................................',
+    '...............................LRCIFjHPmkKI...........................gMfcccccaaaa2abMwujqieFerHPDVAlMMwvsvP..........OTxHvHwslSQAlEiiF...............................',
+    '................................NQIkjKMKsyL..........................gMgfcccca2aaaabSyHsqiijHjvMCDRMfyCMKuwP..........OTxwKPMulCURxkqiEs..............................',
+    '................................JNJvGsfHewA.........................yyflMf33aaaaaaHCSKsiiirlMwwATVAKfMCxMvKP..........QTxIAVTwvAVVBJFiist.............................',
+    '................................fPLxIejHevL........................KvfcccuKKa2aafgSPKvkrrstKMwgLTUyHfPPvPKnP..........QTJICWDxvAVWVPwkiijt............................',
+    '................................lCKvHjfHelL......................FHfccccccctGHKKSSKGsssreijFflnBVCKGfPP.vMBP..........RTJJRWWNIoVWWVAwsiet............................',
+    '................................lSlcujfKetl.....................lucccccccc3aaaa3Ktrqiiir3ijFHyOTVByujPP...N...........OQIJTWWRLoRVWWVAvriet...........................',
+    '................................lSIuHumPlecH...................vyfbcccc3aaa2actGeqqiiieFeFfwPPRVVRPvjMP...............JMILDWWVRLoDWWVUyGjqrt..........................',
+    '................................lSAJAKGvykeu..................HvfFKcaaaaaaaabyujqtu3eFHKfKyyARDDRCPJfML..............ImlJQVVVWVOhTVVWWUMGEqjH.........................',
+    '................................lSALQwe3KvieF................KucccctufcbfaayPKjEsvHFFHHfkllmxDWAPddNnPL..............IIkLVWVTVWDoBDVVVVUIFqijt........................',
+    '.................................LOoQxseHuiiGb.............kKucccc3ctbbgPyMMvsqiEue3eju3jumLCVVnPP.gnUL..............LmkLVWTQVWVoopVTDVVCIsiist.......................',
+    '.................................lPoRNueGGiieG............fHfcccc3a3aa2bMKuuseiirGeiitHjGwARVVSmKM..FL...............JmvNVWTOTWVBhpVTRTVVQwjies.......................',
+    '.................................IQLQRwcGHEiiGf..........vMfcccc3aaaaaGyveijr3ijlMfsGmJmyASVWTCvkl..................HffIRVWTORWVpopVTQQTVVPGqiEt......................',
+    '.................................xRLCTAltutiiqvv........lKvufcceaa2babyGsiisjeswCDCyyMyKnLAVVBAljML.................JjkxUVWTOpWWThoTTQQRDVVMuiijk.....................',
+    '.................................LTBCDRJejHeiikl.......lwfcuyfb3aa2yPwseiievHkvvuyweejffgyCWDNAHjKmu...............fIcvBVVWTNpVWVohoVpOBRVWUysiikk....................',
+    '..................................oQQRRoksHjiiilm.....vylcccbKPMKMPKuEqiijuInHFeikteqtlwMCVWRNAKkKCv...............mkjHTWVVRoBVVWpxhDROOOTVWSHjies....................',
+    '..................................bQNnUOvEeFiiijHv...uyKuGc3ccbb3fPkeiestvMPKe3irwwvwMPPPDWWRAAMlKSvG.............LKckKVWDVRoBVWWpohDTBOORDWVPHeijG...................',
+    '..................................fRLmURItiseiiqlPgmdPCyyguccc3cvyPKvlKKMCSlEiiEuKxAPMInOVWWDOAAvnUwlvF...........mHjwCVVTVRoBVWWDohpTROOQTVWUytqqju..................',
+    '..................................fRLmARAHjeGjirGHHHwMPKKSSgfbbbSPKvtkulKSSciejumKMyKfvLRWRRWTPAwnUxvlu..........vljjKUWDRVRooVVVVThoTTONORTVWSKjiju..................',
+    '..................................fTNIxTRysqjFjusiieeufccHyUUPKKHksi333jslPwtFFvwHffvHyQVWBCWVTCwnUAJvuvt........MfitLVVRQVRhoVVTVVhhRTONNOQTVVLuqisG.................',
+    '...................................PQNATTAueesmKceqiieuGjebKyfeeiqjeeeErejyyesGwKsjvJLPDWWAPWVVDACUAJKvkuF.......vkjwCWDpQDRohVDTVVohRVBAAOQRDVRysieG.................',
+    '....................................OQnQVPvrikCyFtseieuyujreeFEiiisEeFeiirKMbsuwGctwLPRWWVmvSVVVVWTALLJvkGf.....KfjlMVVTBBDpohVDQVWphpVRNANOQRDVClEeuk................',
+    '....................................RRmoUSJtjlUwjjeFuFsvKtii3rFq33i33riiislAKcllsjvnNQVWDQwFdVVDTRTCPALJHuHt...bwftIQVVROBDphhVTOTVDhhpDOAANQQRWDLtijwv...............',
+    '....................................QRnxUVAHumUmssevKceeMkiii3sji3iiiqeqEetxPfKfjlKACSVVQPyFfUVUTQQUTOALLKllvuHIljuLDVDQOBDphhVTNRVVohpVQALANOQVWCHeevH...............',
+    '....................................QRxLoDCywxUIugMwcrqjywEiiieFriiiqjse3iswCAKfGwLAMdSVRSMHkmWVTQNSDTCNAAyvlgyycsHCVVTQNODphhVTNQTVphBVpNLLANOTWDMtesl...............',
+    '....................................QTpOxSUALNUAyPywkjFfMJtrqi3rFrEjsrseiEkKQPbkKPBwcjKSUDSyFlVVTQPAQVUSPPPLIMMKcuAVWVRNAODphhVRNORVDooVRNLLLANQTWUHeelL..............',
+    '.....................................xQRLLBTORVUSPgfyHkHPAHusEi3GujeiiesrsvyRPftlxSleergSDTPHgWVTQQPASVDSCCCQUmjjKSWWTSALODphhVRLNQDWBhpTNLLLLANRVVLkEkv..............',
+    '......................................AToJLTTVVRLmKwlwmwARLIltEijGtiiijvutHASSfklMTPHqitKSUUSSWWVTRQAAoVUCCCUAFevAVWTQPALNDphhVQLLORWphhDQLLJJLLNDVTIjefG.............',
+    '......................................LToLxoRVRoyggKmvMnnURAJvtEetvsrrkKvfKNUUltHSPCPvjijmUWWWWWVDRCPMnCVVDUSfekySWVROALLNTphhVpxxLQVTohVQALJIJLLRWVOlEjH.............',
+    '......................................LRNIgLOURAxymmKlfwKMCTNIHustfHulwwfmLRVSvkgPbfPPgsEjfSWWWWWUUSCCMmUWWUlerwCVWTQALLLNTphhVBxJxNDVBhDRALJHIxLNTVUxkekv............',
+    '......................................LRNIgLQUDQAAMmfKHlvlMURLJIHufKyyyllMPTVyfkmPseefMmsEEFloVWWVUDUTSACUVKeetLTWVRNLJLMODphhVBJKILTVBhVTNLIvvwyLOVWRmjjml...........',
+    '......................................LQoLxQQQRUSAAyKvmywuvoURNNAxJPSwfHKPRVUveuyPfeeeuyyfjeiswlPWVVVDDUUUgrijHNUVTOLxJMMODphhVOJIILQVphDTNLIvvlIJATWDxfjwl...........',
+    '......................................LpNoOOx.fUURQPMwwMMHvJCVTTRRSyymlKAQVVnkkwPyltFurfMHFjeeeetMKPWWVSnMtiEuLRVDQLJJyMLODphhVNIIwxODpopROLIHvuvIxPTVCJfvl...........',
+    '......................................INONLI...fSWTCPALAAMyxADDAyyylfyMNRVWTJlwPglMvvjijleerFFsiieefSSPKdkqqFJQVVTNJJyyynODphhVOIIwyARVBhpQAJwvGuvJAQVDNfjgL..........',
+    '........................................xJ......SVVUTRQBCPANNRDLmvvKJAQRDVRQxmASlvCyHjeGKsieeeFsssqjffebyciFINTWDQLJJyyKnNDRhhVOJIwKLRWBhpRAJIvuuuHyPDVRmkmL..........',
+    '...............................................fTpSWWWWVDTCCQRVRPMMAOQDWVRNxKnMyfwSAKksKMkriiiEjHvejuusufEsHARVVRAIIyyKwINDphhVAJIvwMQWphpRNxIvFuFuKAQVVoflm..........',
+    '...............................................fSBCUUCSUWWWVWWWDROOQTVVVRBAgvMymKMUBMGHSUMHtjqiiqsGKlkHysrGyQDVDOJmIyyIwwADRhhVoJIvHyOVphoTBxIHtssFHJARVAljlI.........',
+    '...............................................fRBCUPMyAUWWWWWWWWVVVWWTOOOPnJCPKgPVCmflCCyPwvukee3FHwjukeEHATVDRLHwJJIvHIADphhVoJIvvyNTVhhpRxIIGtssuwyOUVnkdJ.........',
+    '................................................RPPCMyyAUWWVVVWWWWWWVTOAAAACMdylkyVCwvwCymyMywHGse3eGKHeiswPTVTAKHIxJHtvIADphhUoJIvlKNRVhhoRxJIwGtstvKAUVhldJ.........',
+    '................................................QAMyynPPnCWVUUVVUTTTQNNNAmmPHfKglAVAKKMTSLmnyMMKwtr33HKcsuyQDVSxIIJLKutGINDphhUNJKGuKLQVhhhTxJJwHGutuHyRVBmlJ.........',
+    '................................................QAMyyMPKgSWDSRRTROOQOLLMylmAlmPnKCVCAACVWVCPJKMMyIuqetjjumATVTPJILJKGFGGINDphhUNJJGuKLQVohhTxJJwvGGFtvIOTDxfdx........',
+    '...............................................fRAyyMPmvvyUDRNLQRNOAAMylfwMSAyPyAUWRRDVWWWWUBAnyMPylGcievJQDVCLJLxwuFuuGINDphhVBxJvuKLBVohhRoxJHkFGFkGwARDoffLf.......',
+    '...............................................kTCyPPmwvvvSUCALxQRLwwllwwLPCLmmmPVWVWWWWWWWWWVngmMMAKjqswARVUNxLLwutuutuIODphhVoJJHuwxODphhpNxIwtstFFFlyODolfLf.......',
+    '................................................mUCPyKvvGlSVCALJnCPJvlwLPPmllvKnPUWWWWVVVVVWWWVCmllMyfkvxODURALLKutFGGtuJQpohpUAJIGtHJATRohhRxJIvssFGtkKATBmdNd.......',
+    '................................................mSAyKKvvvfUWCPAnIxCOLnPCAmvGvvIAPRWWVVUDDTUVVVWVSMmLMlumATVTALLJGtFuuGtuIRphpDBxJHuFuwLQDBhhToJIHFstGuFvyRDxdgn.......',
+    '................................................ITAyKKHuvyyUUSAMygxDTymyymHGlmAOOUWWDDDSRTTTDVVWWVBOMvvINVWRLxJvkFuGFGuGJTohpDNLJvkFuHxOTBhhToJJwFsFGuFtwOVNddhN......',
+    '................................................JUPMywvvmyfPVROPxJASSfjkgPmvwAUBOVWWTTRQQQQQRTTVVWVVCImLCWVOLJHttuGusFuGJTohpDNxJvtFuvJNTphhToJJwksFGFssHLTOddoO......',
+    '................................................xVCPMHvyKffySUDOAPPngujuGnAxnPUANWWVTRQONNNOQRRTTVWWDLILTWTNxwutuuuFtjtuJThhpDNxJGttFvIARphhTAJIwussFussGJQRndhN......',
+    '................................................IUSPKKMKftffyVVRQPgHmltkvmACMgCANWWDRQONNAAANNPQRRTWVCoQWDOLwuFuuGGssttuIThhpUoLxGttsGILRTohTNJIIHFstGFtuJOVQdhL......',
+    '.................................................fPCyPyvuttFfUVRAJHgPKufvnSAIgCANWWDCQNAANLJLLLAQQQDVVUVWQAJutuFtGGksFtuITohpDoxxvtssGwLQTohTOJJIwusFGttuwAVQdhJ......',
+    '..................................................MUSMmuHftuKnUDLImPQPmvwAUnmnCAOWWDQONLAPLIJLxxLAPQSTDUTAJvtuGssFktssFuJThhpDoxJHsssFHJOTBhTQLJIHusFttFtHATRdhxI.....',
+    '..................................................MDyKwvuufgMfPVCMMMACPnMnPPIxQQBVWVRONLLAAIIyLJIJAAAOQCCyHkuvurrFsjssFuJThhpULxIussjsGIATphRRAJIHFjrsuukvMRThdhBl....',
+    '..................................................KSSyKKlfyKfvmUDCnwgPSSKlyPLAORRCWWTONLIxAxIJLyIwIJLLANAwuuGusErtFrrssGJThhBULxvsjFsstwADphhRQJIHurErGGsFwQVpdgNd....',
+    '...................................................hUPKmKyKvuHgSDQMKKgCSgvKgyPACPAVWDCNMIIPywIJJKvlwJJJLyGtuHurEruurrrjvLThhBTxIursssjsHLDphhTRxIHGsErGGssvAVThdNl....',
+    '...................................................NVSPyMMKKKKnCDUOAyKPSPMmwHmynmARWWRONIJPJvvHwIwvGlHIIwttuGtrrsuFrsrrlADhhpTxIFrrrsstvxTphhTTxIHtsrEFGsruADDhdNl....',
+    '...................................................AVUUSPyKKyySCSVRCNNNQCSCKflnAnLBWWDRNLxPIvwluvIKlkFuuFstvtrrsFsrEsrrvApohBCxwFEEEtsruxTphhTTxIHjssEtGsruyDDhdLd....',
+    '....................................................dUUCPAMyACUCoVVSCOOPdxSyfHnALANRWWDONLAJwKustHwwHksskuvvsErtFrEErssvChhBpoJmFEqEtsEtJTphhDTxIlsrrqsGFstwQVRdhBL...',
+    '.....................................................AVWVVWVWWVUDWWUDSSMmISSPMLwmAPBVWUQOAAJIyusFkHKIHGvGGHvjEsGsEEEjukvChhBRLIvFqqrFjEtITphhTTxIusrEEEsGsskxDThhoN...',
+    '.....................................................bSVVSSPSSMyPSUWVVUCLxCUMmnmlMPNVWVRQALJJMustttHwwwwvjFGjEtGjEqEkGkwRhhpRxImFqEFGjrFwSphhTTxwtsrEEqsGsrkKTThhBN...',
+    '.....................................................JOOLvsekveiqkHPVWWVBNQUmkwMyMAATWWDOALIJMussutskvHmvtjsrEtGjqEruukmRhhRRxIvtqEFGtjFmSphhDRxwtssrqEsGsskKTThhBN...',
+    '....................................................JQLIlsqirFi3iEquKPVWDpUTPyKwgwAOQDWWBALmIyusstFFtttuvGsrEqtvrqEsGkunShhTRxIurqqrsGstHSphBVTxwussEEErttskIRTNdoN...',
+    '....................................................xLmlsEe33iiiqiiijuyUWVDROCmkkHxSPNWWpPxJyykssstGusjjGGujEqtvjEEsFjkJRhhTQJHtqqqqEtFFHCpoopTxwtstrEEErFssGMRBdhN...',
+    '...................................................ALlkjiEqiiqsjeiiqietISVVCBCMvfmAPKAVWDALxMykjstsjFusjjtHFqqrFtrEEEEFxRhhTOIGrqqEEEEsuHNDThoUxwusrrEEqrtkssmQRdhn...',
+    '..................................................HmmkjriqtEiEejreeqiirtvPVVpSSmILCmmPTVWAxAAKtFstrErsFtrjGGjEEsujEqqrvPQhhTNIkqqqssEqEuwADThoUxIusEqEEqEjFtslOThdhH..',
+    '..................................................LLmvGFqieq33iisksiiiresmPVVpTUCPnmwCQDWoLAAwlluujEEEsukjsuuEqrFFrEEsJBhhBRAHsqqqrsEqqFwLTThoUxIFrEErrEqrtusuOTddhL..',
+    '.........................................JIHu.....AAIwwke33isiiqFHr3rrEiiuwPVVUnASmlLSPQWDAxPCSSSPHEqEEjukrkuqqEFGtEsvABhhRBLvsqqqrtrqqtHLTThoUoItEEEFtEEEsFtlQThghL..',
+    '........................................Lphhh.....AAmlwuqiiiGssF33iesjEiituvPVVngMymoCLNVWQxDWVSSUPvtjEEsujsuEqEFvtrkHNBhhRAJGrqqEssrqEsvLRRhoUxwtEEsukEEErsulNThdhx..',
+    '.......................................IRpdddJv...APllywkEiewKFiiiEu3qq3tFrtwCVUPgyPpALNDWUoUVTALBRwvujEEstkuEqEFGsEsINBhhTLwFEqqEFjEEEruLRThpVoHsEtuksrEEqrulADhhhL..',
+    '....................................HINVVVphddL...POmgMywutlyHciiqsGeqEjHseruKOVDImPSnyARWWVWVQxIoL..GkrqEjGujqqsGsEkIOphhTLvsEqqrsEEEEEFxTThoVoHsruGjrsEEqjulLUphhL..',
+    '...................................fhdddUAwLodhx..PRxyCUCPKGjeFrsFFcsrsucsjrsuJRVAmnCnJLBVWWWVNJwnJ...GtEqqtGurqrktrkJQphoTLGjEqqrsrEqqEtJTRhhVxHssGtErssEqrulxTRhhL..',
+    '..................................JhdbddQfeuPohdLbSDOMKKASweiquHlGreFFFF3qsseswxTUoyPAmLNTWWWVPLInK....ktqqrFGsqEtsslLRBhoQyGrEqrsEsjEqEtJRRhBVxHkFFsrEjFjqEskJRThhL..',
+    '................................JohddhhTQfqqkCQooVWDAweelSnkjjlMKeqijHGeiirFstvHAVUgAMgLOTWWWWVSxnI.....kkqqjuusqqrtmQhhNQOJtqqqssqrsrqEtJRRhpVxHtFsEEEEstsqqsJRThhL..',
+    '................................QppppppVRKsiifCooWWSLvcjKUUKvflAwjEieHviqisvKkjvnCUBSAnMPRUDVWWVonK......ujqqsGsqqrunShhRRLIsqqErEqEtkEEtxTRhpVxwuusqqqqqtsqqsICRhoL..',
+    '................................QTVBJQVWULvriEwNoWWNIlHHlCVCnwmAyksjjvykEEuKveeGwLCUDAMmyATRRVWWUSJ......mvqqrttEqrlxShhUCxwsqqrrqqqsusEtxTRhBUxIuGkEqqqqstrqsIQRhoN..',
+    '................................OOJv.dWWVQJuEijApWVOLKHFjKUVCyyPAluuuKKvttHKcejvHIAUVAnvmxSTOTWVDVI......vvjqqjujqrvoThhUOxHsEEsrqqqEFFrtxTRhBUxIuGtEEEqqsksqjmCRhBN..',
+    '................................JL...lhWWDOJuqjKBWVBNmkssuAVVQLJLnvvKwbGHHKlsEkwwlgSVCIHvnTTNpWWpUf.......kGeqjGsijHQRhhUNJGsEqEEqqqEtujtJTRhBDxHuusErEqqEtFqjwPRhBN..',
+    '...................................INJpWVUUQJtjGPWWQOxHutjKDWTAInAIwKlujfKyussuwMlvADUAJgnURLBWWNLJH......lKjqEGsismUdhpSoIsrEqqEEEqEsuskJRThpVxHusEEsrqqqrsqjwPRhBL..',
+    '..................................gdddVClmPSCKuuMWWQQPyHtsKCVVCAIdAMmHvuFevHkkGILmlnTVSmKMCRoRWWOJxxH.....lKrqEGjisJUdhTBxHjEEqqEssqqEFskJTThBVnHuEqEEErsEEqqrvNRoBL..',
+    '.................................JhdddDmqeGPSPKlnVWTRAMKwHyPVWTPMIxALJHGjqrfwlHJAAlKCDSdwwLRDVDWQJIILl.....GsqEujiFxUdhTOJvrEqqqrukEqEFtuLRphpDnHuEEEqEEjtsqqEvNTBBL..',
+    '................................LhhdhpDIjEeuMOMHwOWWROLyKvHyUWUPOLgmPAIltsEFKKJAPMmyPSSxlmJQVUpWTLIIJxI....fGqEFjivoRdhVBJuEEqqrtvusqEsGHAThoRQIHtEEEEsrEstrqEvNTBBL..',
+    '...............................NDphBRTTxHureuPPJILVWDBNnvkuKCWVCQOLIKyLIvuuumLAPwdyAPgPAlmLQWToVVQAJIJJ....lwjqsjrIQhdhTowsEEqqsGvvtEqrGINRhBRLIvsqEEssrEEstqqGNTBBL..',
+    '...............................NTppRVVUNLJurjvPALxCWVQQAKuuIPWWQBSCMglMMJIHwnCSdGHJNPgKPIJAVVQAVWTQLJJxI....vGEErsJRdhpRxvrEEqrttkvGjqEFwORdpRxIurEErFrEEErtjquATBBN..',
+    '...............................OTRpoQnUQNLJvjjlPAxAWWROoLmwLSWWROCCALmfyALLLAAMluwLNQmfAPoTVUoAVWDQNxxxJw...lMjEEsJpdoRNJuEEEstsEruvkEEsHNTdpRxItEErsjEEqqqjFEuLTBON..',
+    '...............................BVBI...wOBONJGssHPALTWTNAAACCTDWUCAAQAyHvxQOPMfmymJLBDPHxRRUUCxAVWVRQAxJmAl..mMjErsxRdBToIsEErssEEqjGGsqrGNRdpRxwtEEssEEqqqqrsjuLTooN..',
+    '...............................LDN.....INONLJHksKMxOWVBLgKynNQVWRNLCCAKvwMPmfvKxLxNQUnHLRVToAnNVWWWDCLJJPf..vMkErkoBdBRJvsErtsEqqqEtvFErGATdpRxHsEstEqqqqqqqstuLTooN..',
+    '................................N.......fANALIHksHJADWDAmvklLOUWDQAASPMymfvHHKLALNQSygICVDLnPARVDWTnPAxJAf..vPjqswBhhQNItEEsjEqqqqqEukrrGARhpBxvrrtsqqqqqqqqrtuxRooN..',
+    '.........................................lLNLLJvsjKxQWVOLJlIAOUWDROxxPPAJwlvxLAAoQVPfwATVCmmPTVUoTJ..JxxPl..mPjqtnBdNQxvrEjFEqqqqqqqsFsjuARdBBxlrjtjqqjjjEqiqruxRooL..',
+    '...........................................LONxJlsfHATVQxJyMLQDWVTQNLnPQPLJJLAAACCAJwLCDUnmwLSWUoQI...INCl..IPkqtnodONJuEstEqqqqqqqqEtsjuoRdBBJujtrqqEFGGteqqqFJRooL..',
+    '............................................ANNxIvstwoTTmvIJLQVWWVTROLnNQCOANONOCAgJLQDWQwwwIRWDApJ....xCf..IPkEuxohBNwsEtsqiqjjsEqqqstjuoRdBOJujsqqquu..sueqisIRooL..',
+    '............................................vAOLJIvktmCUAHlHLQVWWWVTRNxgAPSCRRRLmLAPQDWVLmwvwRWDAALl....y...IPkjKohhpLGjErEqqsGGHkjqEssjuoRdBBIvsEqEsG....cueisIQooL..',
+    '.............................................uANLxJHkuKPSKvKARVWUSDURQNAIggACSBLAPCRVWVAywfHMUWTAmlyk.......gPfjMhhBBIsqEEqEtu...vujEEsjvAQhpNIuEqqkG......usEjmQooL..',
+    '..............................................INNLxJwufMSAnxCDVVdbnDTRSPAJImgnPQQSTWWWCKvfHyPDWRLlkHf.......gPfjAhhToHEqqqEkl.....vuEqrtmOhhRovsiikl........GjjmOhhL..',
+    '...............................................fPALxJwuuwSxxCDQn...nUTTRQPLJmnPRRDWWWPKHfvyynDWpLvtfAI......mOggohhRntqqqqkl......IwtqrunQdORxuEiruv........HjjvOhhN..',
+    '................................................fMAxJIHkfMMLCDL.....nVUTRRCPAACRVWWWPwlHgMwvxDWBLgvfAx......vNdNhBBOvqiiEsu........lweEuxQdBOmsiiul.........ululOhoN..',
+    '..................................................noLJIHkfwLnSA......oWVUSRSCCDVWWWCKujKPmfvAVUQAxwlPL......vNhBhpRJkqiqju.........HKeEtxQdBNlriru...........NmfNhoL..',
+    '...................................................nALxJHkvylCA......PWWWVDDDVWWWWRMfkulKbuyQVRCSAImSL......mNhBhpCurqqjF..........IJeqtxRdBNkqeu............NmfOhhx..',
+    '....................................................JNxxJvgygCN......CWUUUWWWWUWWDNguGtjuvKPTVBCWCynSL......mNhohRMsqqjF............HkrkxQdBLsieI............OIfOhhx..',
+    '.....................................................LNLLHmAnSN......SVCPCUUCPoUWQAlGseFlMMPVUASVTAxSL......IQhhBQlrqjt..............KkkxQdQLjejw............NJfOohL..',
+    '......................................................LOAxxNoSA......SUPPCCCMynUWOnKjEjlKJLCVSLCdmQoSx......IThhpAkEjk...............JkkLQhTLjkH..............JxOooL..',
+    '.......................................................JNAxOBTA......SUPPMPSMmmUVAKusjHyllLTVAnPl.xASL......dRhhRwssk................JkuxOpOHjlN..............LQoooL..',
+    '........................................................xPAQTnv......SUAPPPyKynVUAvjuHufuvPVTnnPl..NDL.....NphhBPlkut................JfHxoRxkflH..............NBhBOI..',
+    '.........................................................dOTn........SUAMPMmmPVWCMlkHuqjlxRVCImPl..NCI.....OodhBxlu..................JlIoODxlJL...............LBhpx...',
+    '..........................................................IJ.........SUAyyCUPyUVAluKveiswAUVnllPl..Af......NodoOnvF..................xlLNBTJlLL...............LBhpJ...',
+    '.....................................................................SUCPSSMKvCUxutjFequKCVUnllMd..I.......xhhBQIt...................LhOOBTxgIH...............oRhBx...',
+    '.....................................................................nSCPPyvGvSSwFieGcjvySCBCwtbMk........JhhoOL.....................LoRoBThxI................NRhBx...',
+    '....................................................................nPyywmHvtfUCueirHwmyAUnnSntjMg........xhhBA.......................xToBThxv................NRoRL...',
+    '...................................................................GnywgmvvflyUMsqsfnMmmPUgISnufMl........LhNNI.......................QToBTOI.................LRBTR...',
+    '...................................................................wywKHvufbgUCyfjGHwlfwSSnySAHfMd......HxoNNl........................QToBRJu.................LpBTL...',
+    '...................................................................wyvmvfcbMSSAAyGkkbuwAUhLCUSJlLf......Looom........................HoRopRf..................LpBo....',
+    '...................................................................KAngfffdUUMwKweirtHASCnODnALlMf......LooI.........................LpBooJ...................xBpN....',
+    '..................................................................MMPPPPPMSUMvscueitvJCSoACL.MNmAf.....xBNI..........................xBoBI....................mppo....',
+    '.................................................................fPyKwwvvbyUKrieujtvIMSAnNSb..nAP.....JROn...........................xBooI...................Lppo.....',
+    '................................................................vMKvvvukbHMPuiirKgwvKCUnxCSb...Lm.....JQd............................xBBoI...................BpBl.....',
+    '................................................................nPvGutscbMywsiisyyvlMSAnAPPl...u.......J............................looBx....................JpN......',
+    '...............................................................MMvuttccbSPHukjHulffKASnLPmmP........................................NBhpo....................IBI......',
+    '...............................................................Pykjfc3uMUAllyvjjklKASxxAMllP........................................OBhpO....................JL.......',
+    '..............................................................uyCyKKwgPUPKGkykesvLASPnAPmulP.......................................fNBBOJ....................LI.......',
+    '..............................................................LAyyyKKyASKciitljuwPQSnAPMvulP.......................................fNoBg..............................',
+    '.............................................................fPKvutjcKMHHjiqkKwwyUUnMAQPKulP.......................................gNBBI..............................',
+    '............................................................JPKvttccbMHeusisKyIxPUOnPRTSyHgM......................................IBoBI...............................',
+    '............................................................mMltsccbPKsetkcGKgwAUCnASxPgPIIA......................................IOoBI...............................',
+    '...........................................................MyusscccyPuEiGyHklKADUooCDJ.JCxwI......................................IOox................................',
+    '...........................................................PgffbbbmUPketyKbkHMSTOLLnSL.JCoH......................................JhBOf................................',
+    '..........................................................dPSPMMMSMMPuEjvKjHyPSoAAllSL.ISx.......................................Opxx.................................',
+    '.........................................................APmvlffbPlkKjiijKvKASPnNAflUx.IUK.......................................OBJ..................................',
+    '.........................................................PMfccccbykjGeiqFyKMCSxnAAklUL..P........................................Nx...................................',
+    '.........................................................vlcccccmKrqHsqjHyxCUxoPxyfmUL................................................................................',
+    '........................................................Kgcccc3bPHiiGwHGfIASPnLPhyfwP.................................................................................',
+    '........................................................mlcc33cyMGcjwKkesJRShLbbLykmP.................................................................................',
+    '.......................................................KlccccbySylGjjGeruMSoxI..MMfnS.................................................................................',
+    '.......................................................ygfbfySPlvtEieGjuMSPnPI..Ixmm..................................................................................',
+    '.......................................................MSyHfbSwEse3iqHlKSSAnPJ..HALf..................................................................................',
+    '......................................................nPyfccbSwEsjiitKJASnxyf...IPm...................................................................................',
+    '.....................................................xCnvcccbSwsuGjuHKPCPlKM....AJ....................................................................................',
+    '.....................................................LSwuccclUyGHlstkwPSxvlPI.........................................................................................',
+    '.....................................................LSlkcctyUKEfHeqGyCPdvfPI.........................................................................................',
+    '.....................................................nSfcccyUMtieHjuwPSPglfPg.........................................................................................',
+    '....................................................JAgfccKCSlEiqHKHAUCSAlfPm.........................................................................................',
+    '....................................................ynufjbPUMkqiElMLSUUUCwlPI.........................................................................................',
+    '....................................................MmtffyCSKjEiElPTUAPgnAnCI.........................................................................................',
+    '....................................................AgfwygyPuiiruwPUCmLdGAAJ..........................................................................................',
+    '....................................................AngygfyMFequHlPUAvLL.mN...........................................................................................',
+    '....................................................NCPgffyysrtGjGPDLlyL..H...........................................................................................',
+    '....................................................NnvffcyMsjGtjvPUJfJL..............................................................................................',
+    '....................................................AnftfcyMjGjeGKCUgknL..............................................................................................',
+    '....................................................AyfcbwSyseEsHMUUnfmJ..............................................................................................',
+    '....................................................AmccbSSyriruvPVVCmlLJ.............................................................................................',
+    '....................................................LmblSfyMsessvPUCSAgML.............................................................................................',
+    '....................................................LnmMmfKPGjievCUbmPLAL.............................................................................................',
+    '....................................................ApSyfcyPusqrlCUCblLAJ.............................................................................................',
+    '....................................................LRyvfcyMjktkvCVTljbLJ.............................................................................................',
+    '.....................................................xMftcyMsjFugSVoJl................................................................................................',
+    '.....................................................QMftcnPtqejKSVBmv................................................................................................',
+    '.....................................................SPfcgSPvsrjfPVUmfG...............................................................................................',
+    '.....................................................CPbvwyPusjrkMUVAdI...............................................................................................',
+    '.....................................................SPfKcfSfeiikyVVSyw...............................................................................................',
+    '.....................................................MCMlclSmriisyUUSn3...............................................................................................',
+    '......................................................dPfclUyusejvUUdwt...............................................................................................',
+    '......................................................xPfclSMGFGjlUUdfu...............................................................................................',
+    '......................................................LSfccdPteeFHAUSlkG..............................................................................................',
+    '......................................................xSlucfSuEqekISUmkku.............................................................................................',
+    '.......................................................KKvjlSwriismATSwllm............................................................................................',
+    '........................................................MwffmPueiruxSUCALAM...........................................................................................',
+    '........................................................MmljfSKFrekINDSoSI............................................................................................',
+    '........................................................lJKffMyujsGHxTCgMf............................................................................................',
+    '.........................................................yPvkbSwjjskwOSnflG...........................................................................................',
+    '.........................................................yMwubyAvrieGnRQmfjK..........................................................................................',
+    '..........................................................gMlkfPAurieHPRPvkll.........................................................................................',
+    '..........................................................IPwufMCyvteGySTQywmM........................................................................................',
+    '...........................................................fyluwSNmksFvMUVMKow........................................................................................',
+    '............................................................wKvvgSPkertHPUdbI.........................................................................................',
+    '.............................................................JIHmMPJGjjkwPPl..........................................................................................',
+    '..............................................................KnKHlPntjjuKPAH.........................................................................................',
+    '..............................................................vIywllyyursGKALv........................................................................................',
+    '...............................................................uyKmlmPKkjsuJPnv.......................................................................................',
+    '................................................................fyxmfgPykrtHyMvvu.....................................................................................',
+    '.................................................................GJxHlIAKjstHLIfkuu...................................................................................',
+    '...................................................................xymHJAwktlnLIbj....................................................................................',
+    '...................................................................uLLwmxNHjFHnMwH....................................................................................',
+    '.....................................................................JLImxylktHyKvG...................................................................................',
+    '......................................................................LPywMxfslJKfGt..................................................................................',
+    '.......................................................................LCAALIkkmyGesv.................................................................................',
+    '........................................................................mAOLLIuuwKjquv................................................................................',
+    '..........................................................................yPLxwklyHqeuu...............................................................................',
+    '...........................................................................JALxvfwKjisH...............................................................................',
+    '............................................................................INAxvkKKreGj..............................................................................',
+    '.............................................................................mALIkvyHcuH..............................................................................',
+    '..............................................................................JNxvkvytjKf.............................................................................',
+    '..............................................................................IALIktKHjtk.............................................................................',
+    '...............................................................................mNxvkvyuEvL............................................................................',
+    '................................................................................ILJkuKwsvy............................................................................',
+    '.................................................................................MLHklKllv............................................................................',
+    '.................................................................................fLJuuKKvv............................................................................',
+    '..................................................................................LAmkHKlH............................................................................',
+    '..................................................................................IAJulvlH............................................................................',
+    '...................................................................................wLvuGww............................................................................',
+    '...................................................................................IOmluKw............................................................................',
+    '...................................................................................HJLvuKw............................................................................',
+    '....................................................................................IAHuwHk...........................................................................',
+    '....................................................................................INnlmvIJ..........................................................................',
+    '.....................................................................................mLImGIJ..........................................................................',
+    '......................................................................................PxwuwK..........................................................................',
+    '......................................................................................NnwkIJ..........................................................................',
+    '......................................................................................IyHkII..........................................................................',
+    '.......................................................................................KIkIw..........................................................................',
+    '.......................................................................................ynuJI..........................................................................',
+    '.......................................................................................yxlJI..........................................................................',
+    '.......................................................................................HJvJI..........................................................................',
+    '.......................................................................................kLmxI..........................................................................',
+    '.......................................................................................GJJLJ..........................................................................',
+    '........................................................................................vLoL..........................................................................',
+    '........................................................................................vLNL..........................................................................',
+    '........................................................................................vLoL..........................................................................',
+    '........................................................................................HNJv..........................................................................',
+    '........................................................................................vNI...........................................................................',
+    '.........................................................................................v............................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................'],
+  [
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '.........................................................................................Jx...........................................................................',
+    '........................................................................................gpB...........................................................................',
+    '.......................................................................................IhBO............H..............................................................',
+    '.....................................................................................IIdhBx............ho.............................................................',
+    '...................................................................................xgddhph...........Igho.............................................................',
+    '.................................................................................dddddhpBJ..........Iddpo.............................................................',
+    '.......................................................................vJLxb.bbbgddddhpTd..........mddhoI.............................................................',
+    '.....................................................................NJdbdhNoNohbbdhpTRJ.........fgddhBI..............................................................',
+    '...................................................................ldddddBodbbbhddBppTn.........Hxddhox...............................................................',
+    '...................................................................LhddhBhdbbdhpppTDRL........IxdbdhpBf...............................................................',
+    '...............................................................uvJxddhBRBddddhTVDDVVhb......NgddddhhoI................................................................',
+    '..............................................................fMKbLhhBRLbhBBTTWWWVVDRNLJJIIhdddddhooI.................................................................',
+    '.............................................................jMmseJBBAfbmRVVVVVVVVdbbbddbbbddddhhhhx..................................................................',
+    '.........................................................uK..mweelLxleelTVVWWpdbbhdd3bbhdbbdBdhhoox...................................................................',
+    '.........................................................tmffIjijHfeeelSVVhhphdbbbhdb.3hhddhpBBpoH....................................................................',
+    '.......................................................tuelNJsersjqijvPUDBd33dhdb3hhbbbBphhBRpBBL.....................................................................',
+    '......................................................FksjlLkersrjtkKKfPBbbbb3dhbbhpddhpTppRTRxb......................................................................',
+    '.....................................................stjjuIfejjkkHMMleeghdbb3bbBddhphhhTVDTTQI........................................................................',
+    '.....................................................tEjkvvkGGKKKywsirKPBhbbbddRhhpTppTVWDnOJ.........................................................................',
+    '....................................................ujqkKHuGFjeeeFsiiuKfbodddhdThoTVDVVCyK............................................................................',
+    '...................................................FeEtuusre3333iqieGyceexRhhhhVpRWWWVDdbee...........................................................................',
+    '..................................................ltejGFqqii3iiEsFulMMsrtPVppppWVWWWVppMHGHK..........................................................................',
+    '.................................................MlejGjeqcFGHKHwKyMPPyGGKSVDVWWWWWVDpOoPKlfuvH........................................................................',
+    '...........................................uIJlfbgmkGkjsGKPUUUUSSUUSMHHKPUWWWWWWWVVDTpRSMwFjkllu......................................................................',
+    '..........................................GjegCPPPMKKHGHMCUdbnVWUUSPHlKPUVVRRQpVhhhhddpWDAKujjtvj.....................................................................',
+    '........................................FGkjevlkjjkKPAPPSUSa0aUVSPKvkHwvmAdbbbbTdbbbbbhDVUPyHtjjsHv...................................................................',
+    '........................................ukErFFEiiEsHPSSDVCY00aPUyvsjuujejffddbbRdbdddhBbVVSPMyHukflw..................................................................',
+    '.......................................utsqeeeesseFuwPSUVC02aHMKGsejFejHKKxNoddThdhpopTDWWSPCCCPAxnJ..................................................................',
+    '.......................................HkrEuKKuejssssulwPSPKKKujeEFEeuHMSDVTphhTphpDVVWWWWUCSVSKCPPK..................................................................',
+    '.....................................HJvsrjyMKGeesqiEErrslKvseiEqeeEGKHbMVVDTppVTRVVWWUSUVUSDVL.......................................................................',
+    '.....................................CNlsstGkeerieqiiqqieqEiiqieersvPMujcfRVVDDWWVVVTQLxJxSUCPwj......................................................................',
+    '.....................................PNljssjEieeEErssrjrEeEsreErFHKPUPHujcbBVRVWWVTPAxwHHmAUSmfFG.....................................................................',
+    '.....................................QOlttuFttFuuuuuvGvvvGtkGFFvKASPPUPIwldhdbhVDVVQAMvkFuICSKujkkG...................................................................',
+    '.....................................QQmvvvmHwKKKyMMMMMMLMyyyyKAQSPffSUCALohbbdhbhVVpowujtuJUAHtjsu...................................................................',
+    '.....................................QRxJJJLPSSSCSppUUUTUSSSSRRCSSgtjbPDRBQBBOohhhdhUUPKHuklPUSwurEuv.................................................................',
+    '.....................................LQNAACUdnUSSUYYUPPSSPUSCUUMfMKvFskyUUDRDRppBBhhdVCvuuHfIDVAKutssG................................................................',
+    '......................................bATSPMluglllggKbfylbKbbPyutkPMKGjcnVWWWVVVVDDTRWAtEjHllPVTLHussll...............................................................',
+    '.......................................IQPgfuGGvHHwwHHHyHGwHvvvuufKSCKGFkgUWWWWWWWWWWVysiijGkIVWRMyKwwnI..............................................................',
+    '........................................dNJHvvKMMynyyyyAMyyKHfHKwvbyUCMKGkKCWVSVWVDTCyytiiEsjvUVSSSPPPMI...........JJJJ...............................................',
+    '.........................................yMMyyASSSCCCCRCSPAxKHwAPKHHgSSPyHHKUUnPVDSCMKKveEeEekSUlKxllk............Iphhhd..............................................',
+    '..........................................KQONNdvvlllllldPCALJIACPPMySUUSPywSUnyUUSPMwKKHFeqikSSlkk................mIdddm.............................................',
+    '...........................................xRJH..........HmAALJLSUQQSSSSUUCySyyynUTPyKyueeseqkPSmsfH.................xhdbdH...........................................',
+    '............................................N..............IJAxLSQdfPCMPPCSSywyymUUPnywriiisekPTnujjs................JBhdbb...........................................',
+    '............................................................HxAoRx..ugSMMMMywKylvnUSCPlEiieFjkPUPwsjsu................hphbbd..........................................',
+    '.............................................................HAACC....mSPMyKyMgvvgUTCnHEiiFeEkPUSJGjeuj...............IOpdbbJ.........................................',
+    '..............................................................fPx......ISyyyyKvulyUUAlFujsriEuMVTLHurEu................mThdbdd........................................',
+    '...............................................................H........PPMPHuuvynUUAutvyjiqruAVDSMvurlm...............NThd3bhL.......................................',
+    '........................................................................ySyvuFumPbPULvuFjssesvPVVDCyHulxH..............NThhdbhN.......................................',
+    '........................................................................yCKvvvKKbbPUAHGricHjkHCVUVDCPyPQx..............NThhdbhQ.......................................',
+    '........................................................................KMKKyyfccbSUAGeiisllwmPUgPyPPPPO...............NTphddRLl......................................',
+    '.................................LNLLH..................................yyfvlfcccbSDMtiiislKvlPSlvf....................xRBhhoglL......................................',
+    '................................hBhddgI..H..............................KKfGccc33bSSvGsitlKwjuSSvjvH.................vQOBppLveeHl.....................................',
+    '...............................gRBBhfbfjfIl.............................yKsFsc3alSUytGvvKKkjGnUQHEju.................mQdlJKFeesjIv....................................',
+    '..............................uuldRpdfelJdJf...........................mPKcscaauCUPHEiFKfjEtwCVCKsisv................IQlkjeersreuw....................................',
+    '.................................bQThfefPJfwf.........................ISCMKvfbfKyPKtiijGeesHMUVCyGEivK...............mQmutFuHHjqsu....................................',
+    '.............................lgmLdDDoIeenCusgw........................lPKKHvvut3fKGriiscrkwMUVWSymFEvy................JxIIKyywujekK...................................',
+    '............................fxhhRRVDRykEKRvqlP.......................GwvFscccc3byHFEiEresgyCUWWUPywuwK................mCPPPyfvMfrjk...................................',
+    '...........................IxdbdAbwTVAujmCvevP.......................ufsccc33aagMvseEieeuyPCVUoVUCMIoK................lLmmgltlSJtEjF..................................',
+    '..........................mddddhLjEyVCvjwCHevP......................HfccccaaacgMvvfsEieGyPnhVCdSggPAAK................QyvlHwGvSOwsqrt.................................',
+    '.........................fBoooBpOHiryPvjwCvjwy.....................HybccccaacmMHuHKjeruMMwmCVPgMfklNpJ...............vRnvyPAwvCTNHris.................................',
+    '.........................kQpBBRVRJsijMljmPufAL....................ullPg3aaabyPHuFcGGsHKMflxSUAlfKl.HOH...............gRIvADTJvNVTLkqit................................',
+    '..........................Bhf.gVDLGqjMlrgMfKn....................HucjKKKKKMSSwFEervMHkbvvIOUDPljKm..................vNQmvPVVAIoVVTytqis...............................',
+    '..........................I...FLUNIssKvjuGjKL..................jGkscccccc33PKusqEebycejvKATVQAHjum..................NSmlHSWWTxnUWVRwjqet..............................',
+    '...............................fSOxHecHFeijyL.................sGfsccccaaa3MyusjjeijHejlKASVUOAwskyl.................nCfuKUWWWAnSWWVPvjqjG.............................',
+    '...............................fSOLwsqGuiisyL.................GfsccccaaabfKusrse3qFwlvKAUUVVRPJukJl................IRPfunVVWWTxODWWDPGEijt............................',
+    '...............................kRQLxlEeGjEkMM................KmfccccaaabwGjsse3iqrFKMyPSSORWVSLHlJf................NRLfKCVDWWUoApWVVUnFejt............................',
+    '................................ILQLJteGkjuML...............fKKPb33aaafMuqisGeiqstvySPMnACSWnbAymAf..............FJQRwkyUVDVWVpoBVVVVSwsiEu...........................',
+    '.................................ATNxveeGjeyL..............wvjfyKKKKKPPlsqikKeirlKymPglmPSASueKAxNf..............HxRxulPWVRVVWVooUVVVVAvjqsj..........................',
+    '.................................HLQLIsiHjiKP.............GGjcccccc33PwsjqikMfjlyKHfAmKACSnPu.eIAI..............umxPlswSWDRVDWWBopVVVVUMkqiuv.........................',
+    '..................................LRAxGeulrklF...........luccccc33acgyussEiuSnHyMbuKNoACVSwPl..vI..............GmmxSlkyUWTpVDVWpooVVVVVSIjikH.........................',
+    '..................................LTALIuFKuekH..........fKfccc33aaabUPwmKyKMUSfbwHGKRUSVWSwACG................lmmLPnuvCVVRpVRTVVBoTWVDVWPGerku........................',
+    '..................................LTNoNIejveesv........uKlsccaacb3PSSPMKMMHkfHbkHfGyUVTVWUwyUnw..............ulgxRPbswUWVppVRQDWpopVDTDWVntijG........................',
+    '...................................mNoNJervriiGf.......IMfkF3abyPPUyksjejteeijHvctvnTUoDWUKKSCJkt...........ulgxRDPjtLUWWBBVRQTVpooVTRTDVSvEqsv.......................',
+    '....................................LooNljvkiieFu......LPutlKyMSMKvrqqiiisEiisKbeGmAUAmSWDMwAUxvmf.........ulgxODCvjvAVWVBoVRORVTooTDRRRDVAtijI.......................',
+    '....................................NNxNykvHiiiikG.....PSgvgySMKkeri3Ei33reiiswyHwySCgmCWDPvnVPwmvvj.....jullxODWyjsyTVWVBoVpNQVVBhpDRBQTVUIjeuf......................',
+    '....................................JOLNOmKMtiiiejF....SVSSSSPfctseiqe3iieq3qruCngPnynLDWUSwKUSPMmluG...tvlvJODVUGjvAVVVVBoVQAOTVpxoDRBOQDVAuerlG.....................',
+    '.....................................LOxRPbmKeiiiesuvmIoVPMKflvjsEeieiiqieEiiiswymggAPPVWVDPwnUROLIlkFGtulmLQTVVdesKTVVVVooVBLNRVpohDROOORVDyseuv.....................',
+    '.....................................QBLQPcuMj33iieuyMMPMceeerfwc3se3iiiiiFe3EkvCybLPmwPVWUSynTRNAAJvukllJNCRVVSkEGPVWUDVhoUBLAQDDBhTRONNOTVSmcjk.....................',
+    '.....................................IQoRCfGPwei3rejkfjjjsssEieGHE3rEiiirrererkvPSASMgvvAVVUSNTSPPPPPwfvMQQRDWVfetyUWVDDDhoUBLLNTVRhpTQNNNCUVNfjlJ....................',
+    '.....................................JRORSvknMsiietjejtsrsGG33ieyueEsjessieukjtvMUUllMlklPUVUTUUSCCCCNLNCCRDWWMsjHCWVTRDVhhUOLLARVThhDQAAANCUUnjfv....................',
+    '.....................................HnRQRLjlPHsEiqrekuvte3Fji3qwwF3euFr3etvwktvMDPcsfKvkbSVVVVVDRSRRRQQRRDWWVkeuMDWDQRTDhhVOxxLBVDhhDRALLANTVBlkfv...................',
+    '......................................mSppQfvSnujiieHj3FHiieFEiEmPwtEei3EsuKHjkwPVUltjjlHkfnUUVVVTRRRSCRRDVWWmjjKSWWTQRTDohVOLxLQTTohTTNLxJAQUUxffv...................',
+    '......................................mUBOSmkfMmurqeHuieuFiiuursmCNKkiiEtGKyfkwAQVVAyljsFuttwUVVVDCCSSSTTVWWPjqGPVWDRQRDDohUBxJLNTDohRTOLJILNRVomflG..................',
+    '......................................IUBORNtbSAJHssKwseFKksmKlHySCAyHukvyMbvKAPSVCnUSKkesGfcKCVVVTQRRRTDVWUjesyDWVRQQRDTohUOxKIARTpohTQLywILQVVLffIk.................',
+    '......................................lSQRRQwffPQyvvPAmuvPIHAOLPSSUCCymIMylHKoQRUVmfSwfHHkcutclPVVVTQQQTVWSGerwQVVDRQQRVphBTNJwwLQDDohTRAywwJNTVQdfIf.................',
+    '........................................nRBRMHfKRPyLTRAynSCCUSwlJOTUSAAAywlMAOpVUnvmSlEjkGujrsebPUWVRRTVWUKiiGNDWVDQNNRVohRRLJwHJOTVohTTALIHILQVRLdIm.................',
+    '........................................SBoRRAvfmSRRDDCCCTCKMPfcGIPVUOAmfKANORDVSlvLUyfsjsHujjrscmUVVDVVVgeityRWVDTOLNTVohRQLIwHINRVohTDNLIHHJNTDOdfhL................',
+    '........................................SBoRVBKvfICUVVCdgSnfvMKHlwLUVRQLyABRQTVCJgyCUPywGeeKKkeiErfMVUSSyriswNDWDTRNLNTWhhRBLIwHwxQVohTDOLIvHwLQVRdfxL................',
+    '........................................QQoRVRLKlvwQCnyvwymwwMyKgKLTWTRQOOQRTVTLmxCVUmwMykrefKGjiietlKdgjiEvATWVRRQNLNTVohRBLwHHwJQVohoTQLIHHwJNTUhdxg................',
+    '........................................OpxnURLIgmyPxgnMLJgxAAgyAANDWTQQQRTVVToAMMSWCdlASmtercjujreiesuFqiuyTVWDRQOLLNTVooTOLwGvwJOTTohRRLJwvHKAQVQdlIv...............',
+    '........................................LBI.QTxImMPOAAAnACAAPPLPCRDWWVDDVWWVRymyngCWSJyoPgvHveesHucesfFeEtKQDWVRQOAxLOTDooTNLHuGHJNRVohRRxJwuvwyPDUdfgI...............',
+    '.........................................f..ORnmLCDDUSRTTRCCCRRRDVWWWWWVVVTOMvfynyUWVCCUSmfyPwce3vMwmHeqtwOTWWTRQNLJLRDhBRRNJvGvvIARVonRRJJwHuuIARThdmJ...............',
+    '............................................AOJnQTVWVUVWWWWWWWWWWWWWVVDTRTCmllwxACVWWWWVVAwMPJutecbKPvesHATVWVRQOAJIATDhpTOAJGGHvwLRWBnRRxJHuGGvJOTpgmJ...............',
+    '............................................LNxOoInVRCRUDUSWWWWWWWWVDTQBQQCglwnACDVWWWWWWVPAQLwlvseGlejvMRVWVRQONxIKADDhpTNLKGuvHHJCWphBRAJHuuGvILRDhddI..............',
+    '............................................JNNL..vUCACCCPnUWWVVVVVDTQNAAAnxJIxOUSUWWWWWWWWDRAJmxwjuuEuLRDWWUQONLIwKADThpDNLKGuGvHJNVThxBQJwHtFHwxQDhddx..............',
+    '.............................................JI...lDCPPPyyMPUWVVTRTTNLxLPmlyPnxSCAQVWVDUVVWWWDAxLAKfjuJOTVWVROOAJwHKPDDhpDoJHuuuuHIMRVRxBRxwHutFHJATogdxb.............',
+    '...................................................ARAAMKyPyPWVTROQSoxxAyvuuIPQPyyPVWVTTTUVWWWRANOMksvARDWWTQOAJwwHyOTDhpDLIltuuuGwyQVRxBTxIHussvILRpxdxn.............',
+    '...................................................xRAAyyMymyWDSSQAPPAALlFktvoSnHJCWWWTTTTVVVWWUBQPwlICDVWDRQAJIwHHyQDThpTxHGFtuGuHyOVRopDxIHFssuwJQVBddov............',
+    '...................................................LTAAyPyvvyUVSCPxnSSLnHkktHLAHlMRDVWTRRRTDUVWWVDCImLRVWVRQAJwHwHHMCDThpTxvFFttulHKNVRhBULIHFssFvINVBddLv............',
+    '...................................................NTAAPymvHgSVRCNAPAPPxIluGIMdHmAURDWURQQQRTVVVWVTLJQDWWTQAJIHvHwwLRDRhpRJutsFttvHKAVTxBDLIHFsssGwLRQxdNI............',
+    '....................................................mPCyKwvvyySDCNPCnLSALmmKyvlHnCUOTWDRQQQQRTDVVWWBNRVWTQNJHHHvHwILTphBTQIutsstFuHwAVRxpDxIHkFsstHyQTodoJ............',
+    '.....................................................ACyymwKymnUSCQOALoSPnJHHvvwCSAADWVTQQOQQRRTUVWDpDVUQNxwHvvHHHKLTphRTNItFsrstuGwAVThBDLJwutsssuKNVDdLg............',
+    '.....................................................LCMywwPguvUVCQPAJmCQylsuKwgCPyPDWWDQOPQQQQQTUVVVWDSOLIwHvGHHHIAVphRRAwutsrrsuuHLDDBhpQJwusstskwADUdmhx...........',
+    '.....................................................LDAMyymvvlMUURQAJIAPlsFGJAPmJACTVWDCOPQQPNQRRUVVVSPAJwHlHHvGvJADphRQLwusssrrFGvJRVRxBRxHkttsssGJQTddhN...........',
+    '.....................................................IACAPmvvvwKyWRQQAxNPwsFvAPyHKNTRRWDQOPOOPAPOQRTTRPMywHuHHHGuvKADphRRLmFrsFrrsGvJQVRhBTxHkstsssFIOUBdhN...........',
+    '......................................................NUPyKvvvMmKCUCCQNOSxHvKPnlvyOUOoWDSQPNAAMMANOCPNLyKHuvHGuGulKAVohTpxvsrsFsrrsvIAVRhBTxHtrjFsrsHLTRhhN...........',
+    '......................................................NWCyyKKygvvmVDSQSSTAywfgMIvyCShRWVRQPNLLMMLLLMALJKwGGHHuuGGvKADohTBJlsrrFtsEruwLTRhBTxHsrrFsrruJOThhL...........',
+    '......................................................NVSPMMMyHvHySVSCAPUPlkFvPLwySPOTWWDRONLLKyLJmKyJJwGkHwuuFGGvKOVhhTOIGrErrFFrrsHLTRhBTxHsrrstsrswADhhI...........',
+    '.......................................................dSSCPyKwKKMyUVRLnSAukvyCxIPoACDVWVTQNLLIwyyKvmKKGuHHHtstuGvyBDhhSAIurEErsFsErvLTThBTxHsrrEttrjHAToghI..........',
+    '........................................................PUTPMyMyyynVWTQOTCwwMCSggMPAORVWWTQALLyHvKyIwwvFkwHkjrtFkGyRhhoRxvkrEEErsFrrGJTThBRLHsrrEsFsrGnSoddI..........',
+    '........................................................knUVUUUUSCSVWVUDDTNACSxMPMJANQDWWTQAxLLwFvKLyHkFuwGsrsFtsuLShhpQJujEEEEErFrruyRTdoTLHsrrEEssrtwPRhhJ..........',
+    '.........................................................IUUUUUSSSSSUWWDUVTBTxmJyygxAQUWWDRAxLLKlFvKJKvFFHurrFujsGLRdhRQIuEEEEEEjFrruJRRdoTxHsrsrErtsjvARhhI..........',
+    '.........................................................KyImvlkssskvySUVVRQRxIllmMLACDVDWUALLLxwkFvKJwtFHtrsutrsvNTdhRQIuEEEEEEstEEFJRTdoTxHsjsrEEFFrGxRohx..........',
+    '........................................................lHksErsqiiiiiskgSVDTSAnwvIAPAPDDRWVALLLxJvskvIKuuHsrFFsEjHOThhROIuEEEEErsrErtKTTdoTxHtssrEEFFEuxTBhhI.........',
+    '.......................................................wvjrq3ej333iiieqsuxUVUCAxAPPAmnTDRWVNALLIKJvktHwHlHsrFsEEswBRdhTBJuEEEErsrqEEjKTRdoTxHtFrrrEtFEFnRBgdI.........',
+    '......................................................IvssrqejFqqEsEi3eEqjwCUURSSCLnxATDpWWBALLvGKIvkkHwvvsrsrEEkJQhhhTNItEEEEssEEEEjwRRdoTxHsrrssrrrEtwRpgdJ.........',
+    '....................................................lAJustsirEEqieF3iEsreisIASVUhnPALATURWWRALxvtvKJvkFuvHsrEEErGABdhRoLGrEErrrssEEEjwRRdoDxvjEErssEErsHORodJ.........',
+    '....................................................IRwtsrEeqr3iii33EttsqiisvJCUCLxMAATRRDWUALJlssGKKvjjFHGsEEEjvOBdhRLJuEEEssErtrEEjHRRdoTxGjrEErFsEEruLQNhI.........',
+    '....................................................IRmje3esseiiie3iqseiiiEejGKNTCglLQQQOpWVALxljrtHJKGsrkHsEqqjwBBdoQxJGEEErsEEjFrErHTQdoTxGssEqEjFrEEFIQOdI.........',
+    '...........................................uxoxI....IRKtrirKuEirF3iiqri3irrqirkwNTonMAOQQpWVBACmkrrkHJKFEjFFrqqsIBBdoQxIurEEEEEEEtsEEHRQdoTxvksEqqEtsEEtIRQdnx........',
+    '..........................................LxphdhL...xTMkjqjKvFkkFeqEEjrqEsuF3iiuJNUSgIAORDWWWVVUmsErtvKwsEjGjqqsIpBdpQIHsEEEEEEEEjFEEHQQdoTxvksEEEErFrEswCQdhOl.......',
+    '.........................................lTWVphhdJ..ATAvksfKjeuKKkssjEessuKGeiEvHJCUnJxNRVVVWWDUUwjErsvIHrEssqqsJRphpQIurEEErEEEqEsrrvBQdoTxvksEEEEEssErHPQxhOl.......',
+    '........................................JIhVBdIOBof.NUPIlugKeikHlKmlFeieFwfjqetGuvyTULJoSTUDWVRTUUKjErjvKkrrsEqkxRphpOwFEEEsFFsEEEEsrlBQdoTxvsrEEErErssrvApLhQl.......',
+    '......................................JohddpLcefMhNdhVRPMyHGutuseuMAvEqikHqirstertKQDoAAoRURWVRRTVUmjEEsHHtEsrrlNohopAHtEqsFstFsEEErjlpQdoTxvjEqErsEEsFjknRNhBl.......',
+    '.....................................fOphBpVClEijnOoUWTBylcevwwGseHPKtjtH3iisvujrtwNpDCnxRUpWVQQRTDUlrErtwuEEEFmQhhQBLvjErttrrFusEqEjHBQdoTxHjEqrssEErFssITQhOl.......',
+    '....................................IBppTVWWUAGEikPpWWRAykEEjwPyvuffyJvKKjEsGKHuFuyQQUPgLRTBWWQQQQRUPKjErGHjqEFIThhRBLursFsEEErturqqswQQdoTxvrqEsrEEEEstsHSQhOl.......',
+    '....................................LTRQNNVWWTJtEjKTWWDBPHrieGPSAJwHmyMAKtFvKubHvwABPnPLoTTpWWQPPPBTnlujEsGtEqtJThhTBJsrFsrqEEEjutqqjHQQdoRxvrqsjEqEEErFtlPChOl.......',
+    '....................................xQg..bAWWVPKtrkCWWVQPwtEijlUUBNMIgLPMmHKfEquKLAPmlyCQRCBVWDPPNNTL.HkqEsGrqFxThhTNHsssEqqEEEEjFsErvQOdoRxuEEsEqqqEEEstuAShNg.......',
+    '........................................xdSUSUUPHskMVWVQOKuseqkMUDQQOOLffMMfeerGINRMlHJQTQALQWVRQBNNI.vlrEjGjEGAThoTLussEEqqqqEqEttrrvQQdoQxuErjqqqEqEqrtuMCgmQN......',
+    '.......................................dhRPfjmUUyGfKUWVQNykjqsfwnVVTTQLvHKyvssuvJQCglwMCUBMnAVVpRSb....HkqrFjrgOhoRTLFrEqqqqqqqqEjtsEvQQdBQIFErrqqskkrErtuMQmmOL......',
+    '.....................................bxddpKiirlSCKulPWWRNPwsjFHyxTWWVRPMLgdylvmJARAnKmyAVpxmAVVDDBx....uvjEstFLRhBTBwsEqqqjGvltEErstjvQRhROHsEEqEjGHHujErtyRLgOL......',
+    '....................................AohhpVMsriqlSPHlySWVBPMHfmyPPOWWWDROAKMMxJxACnJLMgwnUpnnCWWDCCTL....HuEstuNRhRTMuEqqqsuHHHlkrErtjHQRoRBHsEEEkv...lvjrtwQLgOL......',
+    '....................................QphpTVCJHtqcKPMwHAWWBLmlHKywlxVWVDUTOyglxPAOPmmANJmICoxoDVDVPACg....ylEjFvORhRRwjqqqjHv....GsrrsjHQRhTBHsqqsf.....mGrsHQLgBN......',
+    '....................................RTpTVWDOAIFEcKAywySWDAKvufKkuxUWVTTRSAvlIhPPgnLNRPdJNAoRWDQVRLIxy....IujumQQhRPGEqqjvk......HsErtwQRhTNvrEEuw.....vIjrlCAgBN......',
+    '....................................RDTONCRRQAItrtKMyKAWWOxJvflkvAVWVDQoSSLJnMngxAPORPxLORDVWROVTAInI....PwjvAOhoTMsqqjG........GusrkwQQhRxFEEtu.......HlsuCAgBN......',
+    '....................................wBx...nUSQAIujkKMMnUWQLMwvwmyAVWWDTRCQQSAnIIMQQCPdLARVWRDQNVTAymxI...NwjHROhRQHEqrFj.........MvrkmOphRmsqEHl........JutPLgBN......',
+    '......................................w....nCQNAJlskyMnCVTMKJynMAQVWWUDDRQCPLLLAAQTSxJAQVWRASQBVTNLIxI...NwjwpBhRLsqjts..........MvjtIBphRlrEjH.........NmkPNmBN......',
+    '............................................wNQNLxHkkKAyRVPmwHwnATWWWDTTUURgxANOQRTonoQDWDALSBBVDQAJoJ...QJjIRQhTIjEss...........LmjtmOBhQlEju..........NwfNNnQN......',
+    '.............................................IPCONJvkvMnPVRnIllIAVWWWVTQRDUCLACSSRBAOQTWWBLLUBAVWDPLAJ...RLfLRQhRmrjs............ImfkmNBhOkqjH..........JJlxxgQO......',
+    '..............................................bPROLxwkfKAUUAyKKLCWOdVWVUTTTCPSShhQOBRTWWTPmxURAVUSROpJ...QLfCBooxkjt..............LyfINBpNkjlG...........fMgIgpO......',
+    '...............................................fAQOoyHkvKCVAlIAQTWR.MUVUSSQnASCPPQRRTWWTPLIxVRAUddQQTJ...QLdTBhOltu...............oNlxohRLklI.............LgIhpO......',
+    '................................................HyQOAxHskyTPlHARVoH..oUUDTSCOAPCRRTDWWDQMdnCUAATL.fLTJ...QLdTOoBdGu...............LNgNohRxjlI.............LgJmBO......',
+    '..................................................MQNAxvtfPCnJLRVN....oVVDDURCCCRTVWWDQAwlnURAASL..uNJ...QNdRooBmu................LNgOBhRxlgI.............LoxmBN......',
+    '...................................................xQALJmfvxCnJBVL.....SUWVVVDDDVWWWTOPmvyPACACRm...LJ...QNgRoNNm.................oOdBphphxL..............INNhBN......',
+    '....................................................xQALxIulCnIOVL......yWWWWWWWWWWTOLmImymmPRSoLH.......OBhphBx..................oOdOBhphoN...............LBhBO......',
+    '.....................................................NOALJHlMnINUL......UWUUVUUUSWVQAmfyKllICDSmNw.......xRBooBH..................oOdOBhRooL...............LBhRO......',
+    '......................................................PNNLJlyxIAUL......UVSPPPSPnWVOIvvlllwARUSInn.......lQhoBx...................xOgQBhROI................LBhRQ......',
+    '.......................................................MONLLwlwADL......UVMPPPPynVVAlvksHwyPDVpxIAP......lQhopL...................LQhRBhRBf................xBhRQ......',
+    '.......................................................unONLwvMRDx......UVMMSPmKoURAwkjjKyLCDVBLmnP......xBhBNH...................LRoRBhRL.................LBhRQ......',
+    '.........................................................nAALxONJ.......UVAMyMySUUCAKjsulIARVRoLmmA.....LpBhBd.....................hBBBhRI.................LBhRQ......',
+    '..........................................................JNOOQI........UWSMnPPAWUPKHfuufIODUoOLmnA.....JBoBN......................JRhooBl.................LBhRQ......',
+    '..........................................................ISQgu.........SVAPPymmUDMGfKjjwLQVCLTQmxP.....JBBNf......................JQhooJ..................LpBpO......',
+    '...........................................................JI...........nSnKmHlyUSykjHlHyNTVoxMAxoO.....xBBx.......................IQhNx...................LpBhv......',
+    '.......................................................................KCnmmvGfPVAvFkKMKnBVCAL3fNBQ....NpBx........................IRhox...................xppN.......',
+    '.......................................................................yAwHvuudSUPlvHwllxTUxxJ..gRQ....xBOJ........................IRhoI...................xppN.......',
+    '.......................................................................KyHvvbbSUSPKGjeGIADSnAL...Jw...NpBm.........................IRox....................JppN.......',
+    '.......................................................................yCyyyMPUSywjerjHLpUNLSP........QBd..........................xRpx....................xppN.......',
+    '.....................................................................vAMyymggdSCvkeetvJATQoAnMb........A..........................IpBBx....................xppB.......',
+    '.....................................................................mSmmvutfKPMkeskwyARTxLMlJI...................................IBBo.....................xOh........',
+    '.....................................................................lPmvuucfSMKjevKKnODOxLylIM...................................IooL....................JBx.........',
+    '....................................................................HAMvuutcgSKfHGGcfJCTooPnlIL...................................xBoL....................xpJ.........',
+    '....................................................................IPgftscHSPvtHfesfATOoQUnmxy.................................uNhoI.....................xoH.........',
+    '....................................................................KKukccbySKjeukevyRToAgnAILL.................................vBhol.....................xo..........',
+    '...................................................................HmfjcccMPyveiuwlyPTooSflSxAL.................................gBhxu.....................l...........',
+    '...................................................................yywggwySKfGEewPMATQxARg.dPBL................................IBBx...................................',
+    '..................................................................HmgmmgMUKjjHfuKnmOSxLACL.vRnI................................xBoI...................................',
+    '.................................................................KvuttccgMksuKlelyASoxLgxL..J..................................Opx....................................',
+    '................................................................HvffcccuywjieGfsvPSAxAxgLN....................................LpL.....................................',
+    '...............................................................fHtsccc3yMveieGfGyRRoAoJlAN....................................HI......................................',
+    '..............................................................MyusccetwyKlertGgKPUBODBJloN............................................................................',
+    '..............................................................PClbbbbyMlwKsiekJARROQTCxgoN............................................................................',
+    '..............................................................LSMKKKMSvscGeiFKNQSBRObMomAN............................................................................',
+    '.............................................................wnglfccbMtiiFFsHARUBBNJ.yNxLJ............................................................................',
+    '............................................................fMgkcccsKveqjHvlLCUTBBL..CBLb.............................................................................',
+    '...........................................................vylfccc3fPuesHfvJBSShOg...CAJ..............................................................................',
+    '...........................................................Imcccc3tKMHFscHIPDULdNx....H...............................................................................',
+    '...........................................................Imccc33MKHGjekKASUnllNJ....................................................................................',
+    '..........................................................Klfcc3bMMjjjesmLATUmlmNv....................................................................................',
+    '..........................................................MgbflvyMtiitjuJACooIlIl.....................................................................................',
+    '..........................................................MPyHlbyHrievvwMPPbdmlI......................................................................................',
+    '..........................................................Mnucc3KvqrFllMNCv.JngI......................................................................................',
+    '..........................................................Mfcce3KvjsslJARI..LBL.......................................................................................',
+    '..........................................................yfcc33yHsqjvLPSI...P........................................................................................',
+    '.........................................................fucc3bywFeEtvxCCI............................................................................................',
+    '........................................................SPfcccfMkresuKPPnI............................................................................................',
+    '........................................................UPkc3lSlEsFsfMCxmI............................................................................................',
+    '........................................................TyccfyStqFkjwPAlmI............................................................................................',
+    '........................................................AMblfbPkEjGwPDAlmJ............................................................................................',
+    '........................................................JSKfcbMjrjHKQDAInJ............................................................................................',
+    '........................................................IMcccbMfjFkvCSbJoJ............................................................................................',
+    '........................................................LycccbSKseswCPlfJJ............................................................................................',
+    '........................................................LycccbSljskwCCmekH............................................................................................',
+    '........................................................IycccMMketkKCPgG..............................................................................................',
+    '........................................................JKccvbMvrEtJCPlll.............................................................................................',
+    '........................................................KnbKubMKtejwCPlfIf............................................................................................',
+    '........................................................KQMfcbMwjGuwCTJvmJ............................................................................................',
+    '........................................................wpMcc3MmjsuKSVUynMv...........................................................................................',
+    '.........................................................hPccbyMserHPVSPMMu...........................................................................................',
+    '.........................................................JPbcbMAteqknUAgKl............................................................................................',
+    '.........................................................ICftbMCvkrjwQSJfF............................................................................................',
+    '.........................................................gSgHbPCyvutvLTSwlH...........................................................................................',
+    '..........................................................mymffgSHjtuJRUCKnl..........................................................................................',
+    '...........................................................ywfclSIFjFmAUPfvKv.........................................................................................',
+    '...........................................................LyucuPMvsEsmSSwjjG.........................................................................................',
+    '...........................................................HImlGdSIuEetySCltkv........................................................................................',
+    '............................................................gMgufSPltsjuMTCguufG......................................................................................',
+    '............................................................JPmlkgSMljttwSRAlvmH......................................................................................',
+    '.............................................................lygufMCLGssuICSLIJu......................................................................................',
+    '..............................................................PyvufyCykjttKSCLJ.......................................................................................',
+    '..............................................................lMKvuvyPJkjslMSmlv......................................................................................',
+    '...............................................................KMKvGlMNKjrkvMyllf.....................................................................................',
+    '................................................................KAwwHlyPvsrtvyMfu.....................................................................................',
+    '.................................................................mMmIvlnPHeEFmxLluG...................................................................................',
+    '.................................................................HMMAylvJyvsFuwLygH...................................................................................',
+    '...................................................................yCPyHlIMHjsuwAxxJ..................................................................................',
+    '....................................................................fLCKHlmKHuskMLf...................................................................................',
+    '.....................................................................HmAyHlmMKkjHKj...................................................................................',
+    '.......................................................................ILJwvgyvkulH...................................................................................',
+    '........................................................................mLJvHmJljFwM..................................................................................',
+    '.........................................................................mAJHgJKkjGMl.................................................................................',
+    '.........................................................................kALIHwyvjsHl.................................................................................',
+    '..........................................................................HmLmwJKjrswM................................................................................',
+    '...........................................................................HIJIwyKjrHm................................................................................',
+    '.............................................................................mLwJMtEuIv...............................................................................',
+    '..............................................................................wyIJvrsKJ...............................................................................',
+    '..............................................................................fPJKKsrvI...............................................................................',
+    '...............................................................................mMnwurkK...............................................................................',
+    '................................................................................MnIHrsK...............................................................................',
+    '................................................................................IxJvrsK...............................................................................',
+    '.................................................................................IAmsky...............................................................................',
+    '.................................................................................APIFkK...............................................................................',
+    '.................................................................................HLLGkK...............................................................................',
+    '..................................................................................lMGfK...............................................................................',
+    '..................................................................................vNHly...............................................................................',
+    '...................................................................................IJmy...............................................................................',
+    '....................................................................................Jny...............................................................................',
+    '....................................................................................InJ...............................................................................',
+    '....................................................................................InJ...............................................................................',
+    '....................................................................................xoJ...............................................................................',
+    '....................................................................................LxH...............................................................................',
+    '....................................................................................xI................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................'],
+  [
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '........ffff..........................................................................................................................................................',
+    '.......LBOood.l.......................................................................................................................................................',
+    '.......ILxJhBhhg......................................................................................................................................................',
+    '...........HxhhhxI....................................................................................................................................................',
+    '.............xNhhdIJJ.................................................................................................................................................',
+    '..............LpBhdddgxx..............................................................................................................................................',
+    '...............oRRhhhddddfl...........................................................................................................................................',
+    '................LQTTBhdddhgf..........................................................................................................................................',
+    '.................LpRTRpNddddI.........................................................................................................................................',
+    '.................HNNQTDTohdddfH.......................................................................................................................................',
+    '..................nLJNRUDphhdddlI.....................................................................................................................................',
+    '..................ALmILNQTDRhddddl....................................................................................................................................',
+    '...................mKkHxLARURBhdddv...................................................................................................................................',
+    '...................HKsuwwILCRTpNdddlv.................................................................................................................................',
+    '...................IKssuvvHKARVRhodddH................................................................................................................................',
+    '...................uIltFvukGIAQTTBhddd................................................................................................................................',
+    '.....................IttHGstGILQTDpBhdfu..............................................................................................................................',
+    '.....................JkjvvFjFvILNTDTBhdfl.............................................................................................................................',
+    '.....................JsEuvursuvwJATVTohddl............................................................................................................................',
+    '.....................JsEtGGjsuuuHJATVTRhdffu..........................................................................................................................',
+    '.....................JsqjGGjsFFsuHKLQVVpodfl..........................................................................................................................',
+    '.....................JsqEFGssFFFFkvILQDVpodffu........................................................................................................................',
+    '.....................JsqqFvtrsFFFstHILQUDRodff........................................................................................................................',
+    '.....................JsqqFHtEsFstFtFHJLOUDphdbl.......................................................................................................................',
+    '.....................IjqqtHFqstrsutsGwILCVVBhdfl......................................................................................................................',
+    '.....................IjqqtHFqrsErtFsFvHILCVDBhdfl.....................................................................................................................',
+    '...................ulkqqEuHtqqEsrjFuFFvHIARDTNgffv....................................................................................................................',
+    '...................IviiqjHuEqqqrErFussGvmJARVTodffv...................................................................................................................',
+    '...................HGiiqFHtqqqqqEjuFrsuGvvJODVRhdbl...................................................................................................................',
+    '..................GkqiqjvurqqqqqqrGFrsFuGGwAODVphfbl..................................................................................................................',
+    '..................FriiEGHsqEqqqEErGurrtFuGvKMQDDhgbll.................................................................................................................',
+    '.................sEiiqjvvrqqqqqErjGurrttuGGvKAQVpxffdv................................................................................................................',
+    '................FiiiisuGjqqqqqErrruujsFttGGulyNTVBdbdm.....x..........................................................................................................',
+    '..............stiiiqrFusqqrsEEErrrsutssFtuGuuwLBVphfdd....fxJ.........................................................................................................',
+    '............uvjeiiEsFFsqqEEEEEqErErtFjrFttGGuuKAUVQdfdJ..uIfKl........................................................................................................',
+    '............vujiqstFujEErsrErEEEEEErjssrttuvutHyRVRhddmu.ILfIl........................................................................................................',
+    '.......JoxJJlbuuvJLIwHHGsrssrErrrEEErtsjtFkGGFuKADVBdfdJ.IxfIv........................................................................................................',
+    '......LDphdddddgghhhhhhnmlluFssssrrssrstFtFFGuuvKSVDhddJeyyfKv........................................................................................................',
+    '......LDRhhhhhhddddddbbdNLxJmlukusjssrrsstFtuvGuHATVpmdIdgyfKv........................................................................................................',
+    '.......JlmQRTTTRRRRohhdddbbbOAMJwkstFsrrsjFtFGvuvyPVVhddARxjej........................................................................................................',
+    '..........JLBNNOOQRRRppBhhddddddAyHvvutsssFttuGvvwMSWpmfMRyjitA.......................................................................................................',
+    '............ImmmILNNORTTpohhdddddddoLIvkstsFuuuHHvKPVTodfAAteuP.......................................................................................................',
+    '.............IllvmIIIxLAOQRTohdddbdohxnwvtttFFuHHHwMTDhgfLCGevy.......................................................................................................',
+    '..............wlkuvllHwKJxLBQRRRhdddbdOAJHuuFtuGHwwyQVBxdoSvjHK.......................................................................................................',
+    '..............ullsFGtkuvwwKxLNQRpBohgddbdAyKvGGuvwKIPDRhdASykcmJ...xI.................................................................................................',
+    '...............IwksuGkrsvvvHIJxAQRRphhddddddAymvvwwKADVRngASweHC..lBBI................................................................................................',
+    '................lHjsvusrsFssGHIJLAQTTRhhhdddhhLJwwHwLRWVhlmTyjvP..lhdo................................................................................................',
+    '................lHjjuvFEEsFrrFvwIxANORDDphhdddNNxnIILOVDhlgRPfHP..fxbBO...............................................................................................',
+    '................uIjrtGurqrFsErtvHIIxLLORDVRoohdbdQLxLADVhldRPfwQ..fxbBB...............................................................................................',
+    '.................vurruusqqsFsErtGvvIIJLLQDTDThhddddOONQVpxdNPfnP..dhbBO...............................................................................................',
+    '..................HjqtuFiiqFFjqqFulvHIxxLNQDDDphdddhoBQTToxdxxMy.dhddRO...............................................................................................',
+    '..................IjqsuuEqqEtFrqqsuGkvwIJLNOQRVTohdddORTDpodLPCodNdbdRN............JddJ...............................................................................',
+    '..................GsEqFuEqqiEttrqqsuutuHIJJANQRTTTBhdddTVTonfyTRodddBpL............NhdhI..............................................................................',
+    '...................GGirttqiiirFFrqEFutkGHIIxLAOBTDTpohdhhoNwjKThhbdhBx.............Bhdhm..............................................................................',
+    '...................GuiqsuqiiiqEFFqErFGGkGHHIJLLNORVVRhhdhhLljMpdddhpBl.............OhdhI..............................................................................',
+    '...................JuiqsGqiiiiqttqqqFGGuuGHHIJJLNOTDVToohhxujyphhhBBx..............Ohdbf..............................................................................',
+    '...................HuiqsGqiqiiiFtqqEFFjFFkvHHHHJLOpTDVTphoLujKRhoBpOf..............BphbdJ.............................................................................',
+    '...................JuiqrGqiiiiiFtqqruFqstflHHwwJLOQTDDVToNLurHOOBpOg...............LpBdbbu............................................................................',
+    '...................JuiqjuqiiiiiFtEqrFsqsFulHwJLLNBRTDhdddhLGrefLOBx.................Bphdbl....................l.......................................................',
+    '...................JFiqjGqiiiiqFFEErsjjjvHwKKLQQRQddhhhhooNmtrjegL..................ORphdbg.................vmhJ......................................................',
+    '...................IuiqjGqiiiiqFtqEsjjuGHIxAPRpdhhdhhpppRRRAwvuklv..................NTTBdbbl................xdhI......................................................',
+    '...................IuiqrGEiiiqjjEErsuGHwJLQodhhdhhhBpTTTpTDCMMKHu...................JRTphdbbd..............ohbdI......................................................',
+    '...................uuiEsFqiqqrsEEsuGvwnAhhhhddhhhppTVVpBhoTnJPH......................hTpphd.bff...........fBhbdI......................................................',
+    '..................GkriFFEqiqFsErFuHwJxoOddddhhpTTTDVVVhhoBPlIJ.......................ODTpohb..mf..........fQhbdm......................................................',
+    '..................vjiqFFqqEssrrtGwJLQdbdddhpTDTRpRTDVDhhBQmlyJ.......................ATTTphdb..bm.........fRBddbg.....................................................',
+    '..................vjiquFqqsFrsuvmJAddddhoppTTRBOBQTVVQhhRAgyJ...............IoILI.....dTTpBhdb..fI....H...lRpodbI.....................................................',
+    '..................vjirFsqqsssuHILddddhhhRDTQOOOOBRTVphhoRylI................vxoglkG...bRDpphddb.bdm..MAJ..lRTpdbbm....................................................',
+    '..................GjqssrqEjFGHJxoddhhpUTQNNNNNNNORVVodhQLHlI..................IJukkjs..mTTpBhhhdbbdgbwnl..fRDRhdbhm...................................................',
+    '.................GsqqsjrssFGwyAddhhRTSPAALLLLLLNOTVRddhRIufJ..................gPyHkstj.eLDTpphhddbbghPxfk..LTRohbdd...................................................',
+    '................vIeiErrsklvmAddhhRRQQAxxxJJJIILNRVDodxBRgvlI...................gyMwussFemVDTTpBhddbbdDClsG.IDDRhdbdm..................................................',
+    '................lweqrEstuwJndhhoRTQLxxJIwvvwIJLOTVRddoQPlmA.....................wPMKutfvPWWVTTphddbbbRSwjfudDVTphbdd..................................................',
+    '................luqqjstumndhhhpTRAxJIIHvGulHJxLQDDOdhQOxfmM......................yPywGulmUWWVDTphddbbbSMtcGdDVDpodbdx.................................................',
+    '...............lHeqrtuHIxhdhopROLJIIHvtkuvvHILNRVphghRNIkHA......................PCMyKwvvMVWVVVpohhdbbQSGjcMUVDnohddhg................................................',
+    '...............lHeEsuvnxdhoBTRAJIwvkuGukuGvvILORVBhhoTAHjmA.......................ASPMKKwwPWWVVDpphddbBSwucjmVUfbOdddNd...............................................',
+    '...............ltestHInhhhRTOLJIHvujtuuuuuuHJAQTTogoNSwfvl..............HLJIIwwHlbMUUSPMywyUWWWVDTphhdRSyHFicPSlcKhddOLn..............................................',
+    '..............LgerFvJxdhpTTNxIwGtGuFjsuGuuHwxNRDoddORQujJ..............IxmlffjfPMKdSVVUSCPyAUWWWVVphBxgMPMHsecwwjfdhhLbJL.............................................',
+    '..............wuetlIxdoBTRLJIHGsrsuGtsjGGlKJAQDVhmdQCntjJ..............PJIvusjuymmyUVhdhUSCApWWVVDRTmeefPSKGsevMlcmooJevJ.............................................',
+    '.............HfjsvJghoQRQAJHussrEErtGFjFGvILNTVphnhRAlsjJ................MMKHvwyvvmUVpodddoDVWWVVVVVAkq3myctHGlwwkvPRIelJ.............................................',
+    '.............IfjlJgnhQROxIHtjssrEEErGursvIJAQDVhgmBRykjjK.................mCMyMSSSUVVVphdbdddpWWWVVWVnFEGKrietKyMGjgDKelI.............................................',
+    '............vHjkIndBRQAxIvsEErttrEEEGuEsuJLOTDRhmhRTKfjjJ.................HnCAPUUSCUVVDphddbbhpVWWWWVPwGmMtiiietyvkfwKjfw.............................................',
+    '...........HLbfgxdOQRAnIHtrEEErFjEErGurruJLQVRhdIoTAvjwHu.................jgUCCCgklnCVVVTohddbdhTVWTSCLyMCwsEiiieHKjjKHju.............................................',
+    '...........ILbmhhNRQLIIlsjrEEEErsrErGursGJNRVBddhBQnujyJ..............tGvHKPUUPfssKyMPUWVpoohdddnCUnMAPPSDPwFqiiiFHGjvHeeG............................................',
+    '...........gxdhohRQLJwvGuFFsEEqqrrErGursvLQDphddNTAIujyJ............GGfffgATUMljcvPPMMCVWVTpBhhobnPwKPCSDWVCHtqiiikKkjuFjju.............lIJI..........................',
+    '..........LhdxoBTRLIwvuFuutttsEqEEqrGFEsvARVodddBRxIujyJ.........kGtlktuvySUSmkGKPCPMMARWWDppBBBAmgKvwPSVWWWPHtEiiiHvsswlbKf............JBBdd.........................',
+    '..........OhdxhQOAKvtkssrsssFFkrqqqEutrtHOTDhddLRQIIujyJ........HxvkkklyPSUMfsjcwPnyMACSDWWDTTTTBJluGkHMSWWWWSyuEqiqKGeGKHjlM............npdbl........................',
+    '.........IxhhoQNJHussrrrrrrrrtGtEEqEsjtKLRDhdddhDOIJujMx........wgMyKwyCUUKFEiievyyACUUUUWWWWWWVTSykerruyUWWbyPPHriitvrefHekP.............hBbbl.......................',
+    '.........NhhhBCKGtsrjrrjrrrsrskGFEEEEFvKPDDddddBDNIxljPo..........LCSCSUUMsqeieGyPUUhpDDVVWVVWWWVUSAviiEtPWU0aySCHEiEKuieGekP.............xRdbbl......................',
+    '.........NhhQCwuttuvvvvHkrssssstGsEqEGHJSTBdddhDVNILvjKPy..........GATUVUnvvvHKPSPUDdddddddddTVTSUUyvsiiEyWUY01mUPuEsMvqeHjlP.............ITdbbdf.....................',
+    '........fLhOQJGulllIIIIlmussssssuurqrGIxToddddLTDNJAHjjKM...........bSVVTMvHKMUAgmCVVhdddddddhhnmKSwuFriivVSY00ayUyuvPKssKmMM.............JThdbbhv....................',
+    '........LhoBxvvuHH......HlHksrrrkvsErGILUomxxgdnRNLAKFcyA..........nnUVSmkeEsmMwfwPVWVDpphodddhgjcMCJujEejMUy002gVCyMPyuuMCn..............JRhdbbhI....................',
+    '.......fOhBOnII..........uIGsrrrkvtErGIAVphoohlknQAAyueKP........lHASVUnuqEekMvfvKSUWWWVVDppppTLukHPSKFsqisPUaabyVUCAMMwmCQI..............JRhhdhpx....................',
+    '.......oBoNoogu...........bwkrErsvFEsHJNVTBRRoIkfMPNyGeKm......bHmlfPUPusiiuKmfGwMUVWWUVWVDDTTWTyKbwUCwksEqcKSSUSCAxvfHwyCd.............uHxRhhdhJH....................',
+    '......OTBNBLL..............KfjEEsvurtHLOVVVVVBxIkbMAyHjwLG....lwutvPUUmjjsuvvvuHyCUWVCPSUVWWVVWVOyHunUPKvsqeecflwIIHkjreclvG............KnmRphowefG...................',
+    '......BToBOJ................vtEEsvujGwLQVWWWWTNxljlAAKksmJ...IIllHADUPHGHMKjsvHIPUUUPMPPSPCWWWWUMKfjFnSSAwussrrsssuHGjrErrjkfM..........KllPPMleiju...................',
+    '......ORoBn.................HlEEsvFjHILQVVVWWVQLIFcyPyurlI...HJMPCTUUKtjjKcEkHJASVCPPyPMyPDVDVUOglseeFMUDSPKvjeEEqsuvGjrssEiejf.........wljffcerFeeH..................',
+    '......NTom..................wfErsHujHILTDTDVWWDQxHsfMAKskw....gPPUDUPvEijGeruwySUUyyUyKyMUThddhNLJvsEcHSWWWUMHsEiEEjuHHjessriiek........KlstkstHvjeGf.................',
+    '......OTx...................vlkrsHusHIAVVTRDVWWDoJucHPMkjgI.....bmWUKFqiFKssuwMUUgwySymCUdhhhpRRRNLwsiGmUUbSUMwGriiqrsHKGerrEqieI......vftvMPKKPAHjekw................',
+    '......Ix.....................IKjsHGfHIOVDRQQTWWWBAmkcwMljfK.....HMVUwsiEKMljuKPUSluvKMMCSRTTDDDTTROLuiEfUy2ugCSKGFEiiityPmsqqricK......HjtKSUnmSULkisK................',
+    '.............................JKjsHHvmJRDTQNORVWWDOxljuyMufv.....yAUSvsskunKjuKPUdtttvMSnMUVVVVWVVTQLGiqkSg0acvSSMGsEqiijnCmEeEijK.....lkkvMTUngUVOHrjk................',
+    '.............................JKjtHHHIATTQALNQRVWWTAwfkwCmjkI...wvnUMtjHjeHKfGySSgbcstHMSyMASCSUUSSQLlsqjPb11aaaCSyGFrEqqkPPkqiisM....vlsuKSVVxmUWUMkEfH...............',
+    '.............................JKjtwwIxRDTOLxLNQTVWVQJHvuKIkfK..mwvLUmkteiijwKwPSdMbcctumPSyMyyASAfnRAKGcjPma112cyYUMvsrEEqjywqiiul...uustHPVWVonTWWSysjuu..............',
+    '.............................JKjtwwJNTVQALJJAORDWWUMlmHfwKlybmmvwCSlvGiiiiuMoSMbfmfcctKmMSCAPMwIfyToMKjjPUf211acydaSwtsrEEuGiicH....vksvyTVVWQxTWWVPljjv..............',
+    '.............................JJjFIIxOTTNLyKIxAQRVWVOwmMkkfKDTymwADUmmHeiiqjMTMbccugbccuKKyAUM..ySUToAKjjPCMc201acnpbhMusrEqqiijK...FktGyCVVRVRoRVWWULueuf.............',
+    '.............................JyjuIIARTQLIKKwJLORTWWRnmmHjeuPUPKySWVAKvGiiijKDM3ccclKbcGvwPPmG...xxTNAKjjMYCva102acydpbCKtrEqiifK..uttuKCDVTQVToQVVWWDyjjml............',
+    '.............................JLkvJIOTRAJHvKKwKAQTVWTLmmyuqecPUoSWWVPjjKjiisyUyaaaccfPylmMyv.......QCPMjjMhUyca002acHSaDbPvsrrswMjuttuwMSDVSPUVBRDVDWVRwjll............',
+    '.............................ILlIJLQTQxwvGHKwmyPRDWVNJnAwjeeKUVWWVUHiEkHrisKUyaaaccbKyPPUm........mNCPfsfUagta2002actPUaUhykkwybtssuKSSDDUAADVQRDUQTVVAfjlH...........',
+    '.............................ILIIxNRRAIluuuIKwKAQTVWDLnQCvrejgVVDPmFeieHustyPbaaaacccwKdSM.........fQCltbSadGca1012actySpXUPMyucttuKSbCVSCLxTVpBDDOQVWTmjfI...........',
+    '.............................JIIJLRROJvuFuuHKwILORVWWQoRUMeiqjySSyktjiijKHfMSyKa2aaccfubPL..........ARnucMSSytc21012accHPUdpSfjssuKCUhCUCAxnRVBoTDNORVVQlkk...........',
+    '............................xoIILOTQLHtFkvKvvKwxAQTWWDQoCPkeiEjPUPwvGEiitKwAUfbbaaaacccbPx..........LRxujgSdbKsa21012acrGPadKsssFHADDUSSCAnyCVhhTTNANRVDgffK..........',
+    '............................LNmIARTAwGFvwLLvuHKJAQTVWWUnnSKtiiElSUSMHEiiiuPDMaacba2acccbPJ..........LRLlrbSabSGca21012aiEtKytsstvMSDUSCCSPyyCVohTTNLLOTVpmfl..........',
+    '............................LNmJNTRnGuvKJLLIuGKJLORVWWVoInPvsiicMUUmvtiiisMVwc22aGaacccbSx..........vnCHsjKCSSMsca2002aaiicsstFHyPSUUPMPbayyCVohTTALLABDVoffw.........',
+    '............................LNmLQRNwuvKKwvKMlkKKyARTVWWRLmCMvriijyUmkGriirMUvc222aFaacKySL...........AUyucbSdYSHEia2002a3iicFKKaMMPSPyKMygyyCVohTTAxxLARVBlfH.........',
+    '............................LNmORQJvHKIHuFHLKuuKxAOTVWWUPmPCyujEikUMcGFiirMUuc2222abfmKbKP...........OUMvjbSdaUKFq3a2012aa3isGKbyyMMyHHKyMyyCVBohUNxIJLQTDofgl........',
+    '............................NNnQRLwlwmluFFlJMukKyMNCDWWWQAnPPwlseuUPjjGtisMWfa2222acbfcavAlF..........gPHsbYoWCMGFi3a1012aaiicFGGKMMfGHKKKybdUpNhTOxmIJNRVQddJu.......',
+    '...........................LnxxROIwwwwvuttkHLwvwKMACDVWWVRxgPMguqvUStijHskPVfa22222aaccalSywk.........lPKtsbldXCyGEaa21022aaaiFGcGyM2abyyyyabSRAhTOxwHILQVTndJf.......',
+    '...........................NoxNRoIILLIIJIksvxLKlKMAQTVWWWDAJMMnuqKUSHeqkKlMVMKva22222ccafUMHuG.........IymkjjgdKfKFa222102212cFs2FKyKGgKlyyKKySAhTOJHHIJODVBdmm.......',
+    '...........................NoxBRxxANf..JnvtGJxKvKMPRTVWWWWRNIgSfewSSMsiEHyAUfa2ba222accabUUxlfGt........GywvllH.cKHEa2221111aiEacFKKHGKGbKKGHySohTQJHvHIARVTddhJ......',
+    '...........................NoLQNLxgI....HIGkIxJwKxQTVWWWWWVQAymlvMdySviijPUSc21aaba2acccyUVOKuuuH........vMLLH..cKKccaa2201aaiiaasGHGbGFFHGGKMSohTQJHvvHJQDThdxx......',
+    '...........................OoNRAJv.......MKkHLLJJARDWWWVWWVTRPwmMKjHSnFeeKVSc2112cbaacbvbgVCxyvklut.............EGKGaaa2a202aaiaaEFGbaFa2tGGabSohRQJHGvHwLRUhdxJ......',
+    '...........................OBOQAl........AnkvLALxOTVWWDUVWVURCAPKeqkPSKs3sSSc21112aFabKbafVSLyMmukGj...........FsGyKba21aa102aaaaqFF2aa2acGGbdPCohSxHvvHHIPDDhghL.....',
+    '...........................BpBLl.........LoIlJLLNRDWWRCUUDVRCMKfFqiEfPAGeeMSc2111122uHbacfUSNLxAJlkuF........jGcjHMyGEiaaa2012aa2aEc122aEsGGKKMSohRxHHGGvHxRDhdhN.....',
+    '...........................OpLG...........nCgJLLODVWDAPRUDDPwussqiiieHPyseMUb2111121aaaaabUDRAnnyyHffu.....uHkjjtKPMGsEqaaa1002222ca22i3EFGGGHyTohULwHutuvIODhghN.....',
+    '...........................ORd............LSgIALQVWVBLARUDCnvjesqiiiikPPHcPUuc2111212aaacbUUDSPymwMKkfGGGvvHfccGKbSMacsEaaa20001122aa2iqEGGGGGyTohUAwvGFtGwADThhm.....',
+    '...........................NB.............LCmJNNRWWTNAOTUUgwfsseiqiiijySMlPSabt222212aaacfPVVVUPKlwyyHfffffFetHKKPSPHGaaE3a21YY0011aaaEEsFGGuGyUohUnwlGutFvJRVhnhJ....',
+    '...........................II.............JQmxOQDWVoANCTVCHfujiieeiiirKUQnSy2aaba2a1aaaabfbVVWWUPyvlyyHHHHjjGHKMPSUPyKFsFFa220Y00112aiEFFGGfKKPUohSxHGttFFuIBVhghI....',
+    '..........................................xQnLQTWWRAPOQDVAujujiiiirrijMDSCUya22aaca1aaaccabUCUWWUPKHlwPACMlHyyPSSUbyyKHcsFsa2201aa21aiEFFGKYKgaUohSxwHFtFuuvADDhhI....',
+    '..........................................LRxARDWVhAQQQVWykseEE3iieGjkSSSTVya2222cc2acctaabUASVWWUPMKlvySSyyMCTUSSamKKG2cFF2ac02Esa12aEEFaaGKwdUohUxIwGtsFGvyTVhhJ....',
+    '..........................................LRxNTVVPxPSQRWWxtEiieEiqtukvUSCDWya22222tbbHcaaabUACVWWWVCywvgSSyLPUDCPMyygwGacFGsEc0aFFca0ai3acGGGKMShhUxIwvtssFGJQVhhJ....',
+    '..........................................LOLOVWOJACRTVUUAurqirFjGKcknVSAUWyaa22222aKaaaaabUACWVVWWVSMKKCCAPSRCAMKKKabGeEGGGca12ccFc02aiqFGHKKMShoUxIHGFsssGIoVhggm...',
+    '.........................................IBoOTVTxJPRTVWhnCmkjrtHvutfHAVCCUUycaaaaa22aaaaaabUACWUUDVWWSLxCQQUpCAMMKHHHKGcFGGra012aiFFa0aisFGbaMMUhhUxIvFstsstwADohdxf..',
+    '.........................................IBoQVVoJMQTDVVnvwMwuFuteesHLUUCCWnuGaaaaaa12caaaabUoSVUSRDVWWDSURUTOAMyKwHHHHGFFFFa212a3icFc12qsFFfbMAShoUxwvtrttstvLRTodx...',
+    '.........................................JpQTVRAxACDVUnKjjMykejeijwLCVUCSUgcacaaaaa12aaaabPUAUVTSRSTUVWWWRNNAMyKHHHbKKvcFFsiaaa3iEcFsaacsssFHyAShoUxIlsrjFFstJQDBdx...',
+    '.........................................IQTVDxLoORVVPdwjEfMljsktHLRUVRCSUbcatbaaa22aaaabMPASUTCCCCCTUDDRNAMyKHvvHmYHKvacGHEi3iqsFGGcFa2ssssGKAShoTxIusErtussHATBdxf..',
+    '..........................................bADNxAQRVVSdyKjieMKwwKwLBVVSSSUSbca2tccc22acctbKPoVUCPPPCCRRROALyKvuuuHaaKHKyKaKMHFEcFGHKKaGc1asssuKAShoSxIvFrrsuukuyTRhhf..',
+    '...........................................mRAoOQTWAmnPKkEcKbkwLABDWUPCTPgfcaaacHtaatfubaKPAVTONAAAPQQONLwHwHuFuvgdHvKyPmKMMKaFGGHKaKGsacsFFuKAUhhSLIvtrrrsGukKTRdhx..',
+    '..........................................xRQoAQTVWyfyPMurjyltwQpDWVSCCUyfccaaaabvfbyKca3KPpVCAALJLAPALLyHuuHHGGvmwvHwMSybyMKfbaGGGbGGFFcFFFFwAUhoSxwksrrrruukwRThdBo.',
+    '.........................................mNROLNQVUdKjjPCnGlMnILRpWVDSCCUKkcccaaaaubMvacatyPUUALMJJLLLLIIHHukGHHHHvvGvKPRhyPyHGaaFFGGGGGGatGsFHPUhoRxHjEErrEjtuvQDhdBN.',
+    '........................................mLQSANQTVSmKjjMSMMPPxxADVVUUSCSUgfcccccccaacbccbySoVSLJJJJLxxJHGuHussuHHHvGuvKCRhAPKHGGvfGFFFGGGHvfsFHAUhoQxvrEErrErsuvAThdBN.',
+    '.......................................wLNRQAOTVUgwMkrvybfSRCOSWWVDDSCSnyfccccccsaaccccfSCoVCLJJJJJnwHutuHvsssGHvvGuvnQphAAyHuGb0HFFFFGGvbaFtvPThoCxvrEEssEErtvATBdpN.',
+    '......................................vIoBRAARVWSvKPurtHEifPVWWWWUUSCCPlvvfcctccccccccbPSPCWQJKJJKKKHusskvHGsrsGHvvuHASOhQAyHuuvHutFFFFGGGHbuHPShoPJGEEEstrEEsvLRBhpN.',
+    '.....................................vJoNRToOVWCfblPGqeteeEuPVWVVUSCUSgubHlcscfsccffcfdUOApVAIIIJJIHGsststvHkssFHvGlIQBhoQAyHFFuuFttutFuGGHaGKCooBPJuEqEEstrEruLRBhRN.',
+    '....................................lLLoQVUBTWWSHtGPleeuksseuSVVDDDSCKvutbvHffut3stfbyUUOOUSyImIJIHutjkusjFvHusstGuvLTohQOLwGtFtFFuvbGtuvvvGvMShRRNmtEEEErFsrEtJRQhRN.',
+    '...................................ILxLODWVTVWWVAvlPfrcKGeirclSDDTDUyvGusccbKlvbcsfySUUUOAUCxImwKwutssssssrkHHtrsGkwATohQAyHuFFFuuuf0GtuvvvGHPRhTRAmsEqEqErujEsICQhRN.',
+    '...................................LBoBDVVRRTVWWVnmPljwvjiiirfMUDRCnMwvuttcsfyCygmyUVUUSPwvyAynyKGsjjjjssrrtlHvsstGJChooOLyvttFFuFFGHttuGvvvICRhTCLlrEEEqqEsFrsHCRhRN.',
+    '...................................LDTVVTQROORVWWAJSmlKHeEiiEtmUDUPmMMgvuftscKyyyyynUUCAwFsFyAAMKmlmwwKwvjrssvHGssHARhhRNxIGttutsrjtFsttGvlHICThSPJuEEErEEEEsssHCRhRN.',
+    '...................................HIxUVRBQNLOUWWToCyynKueqqeiuPUUyKgnPmvvuuuffbffgyUTOmuFEicyPAPMIKPMwMvusErFvwtswoTdoToJKuttFsrrrsttssuvuvySRhSAJkEEEEEEqErstHOQhRN.',
+    '.....................................dSDpOOnxCRVWWWonwwKKueqiiifPSyKvgyygvvvlvvvGgUVCCCyfsrEijvMSm.......GtrEsGHukwNTdoRLJvttFjrssrrjtFsFGuvySRhSAIkEEEEqqqEErFHNRoRN.',
+    '....................................fRTRBQNxyAQDWWWDPnKmKyueqiiqkPMKwvlyMgvvvvvvgyVUCALMKusrqieHPI........GtErFuHGIOQhQOxwtsssrrjsrrrrsFtuuHARRhRLHjEEEErrEEEEsHOQoRN.',
+    '....................................lTTQBQOAdgPRVWWWVCMKgKyGeEEirwPyKHvvgPmvvHwPUWDTQAmmMKujqqiefv.........utErtvvLQhhRAJvssrrrtFtssrrjFtkGwCoooOxvjEEEsuujqqEjHNQhpo.',
+    '....................................lTTRQQNdHKxOTWWWWWUAKlmMHeessjKPyKHvvmyMynMPCVDRQAIvfMMusEiiise........HkjrsuvABhRRLIujrssssstuusrrsFtuKShoRLIGrErtuGvurqEjHNQhpo.',
+    '....................................lTTRRALnHHwACDWWWWWVPKHlKvjjsEjyPywvvlmmnUUlfRDTQAyIvvwyujsiiirs........wGrsFvNBhTOJvtrsFFssrrstGtjrFtuJThoRxmtErsGtsuvtEErvARoRo.',
+    '....................................lTRRToxMljuKACDWWVVWVOKvHleeGercKPyHvmvvySm..IQTQNAAJufMmusEiiij........IHrtumBQhTLwksFFsrrrrrrstGtjsstJThoRxvsEsFFjEjuGsqEGARoRo.',
+    '....................................NRRTRQylukfuwLCVWUUWWVCyKjieGeqskwPyKvmPUM....nDTQOAxwwnAwsqEiiek.......IHjFvJRBoSJGsrssjrrjjjrrjtutjstyThBRJurrktjEEEsGtqEuARoRN.',
+    '...................................OTBRTBNIkjkGjkKNDWDCDWWWSMkecGcirjcKPyySUPH.....xTTROPLMPQIsqsuqijG......wwkumNhBRAvsrEErtvHHwHtrrjuusruLRhRQHtjtFrEEEqEuFEEuLRNRL.',
+    '...................................OTBRToPJsqiEskuJQVVCSUVWWUKstHGeitsclPSUUl.......NOTTRRTUSwsrHKjiqsG......fHumRhBRmsEErskllHwIHkkrrsutjuAohTAGssFrEEEqqEsusEFLRNRo.',
+    '...................................NTBTToCytEiiEscHLUWSPSUVWWMcekKjisGscjwPUm.........NOCOgUPGesyPsiieuj.....lIlxQoRxurEjtHHH.....GlkrrstjvNooTMussrEEEqqqEruFEFAQopo.',
+    '...................................OTBTUBSMlriqiirkKCWDSCUVVVysecMmsijHjiijMUK............gSwjisCCFirreuu....AxmNhBQItskHv..........GjrjstwNoBRJttsqqqqqEEqEstEFAQoRo.',
+    '...................................OTBTVoCMurEiiiqjHMUVSCSUVWMGEsuMviqGKciifUSn...........APFeqwUSuijGrEl....PohRhBOmvmlv...........fvjrstJohQCwtsrqqqqEqqEErtruAQoRL.',
+    '...................................OTORVQdLveEqiiqskwPVSPCUWWMsiiiHKiieHHEieSDCx.........wPwtEuoWSuirwsqlP...QpBRhRNmIl..............wjrsuLohTPHsEqqEsGurqqErttvNQopL.',
+    '...................................OpBpVSmywsiqrrEqtvyUUCPSWWMsiiiHMsiilPuecSTCpx........IAwuumQWSuiqHuEvP...CTpppRpJv...............HjssuNNoTNurqqEtlvlHFEqqtklABhRL.',
+    '..................................JBBBpWUnJJuriesEerFHPVSMCWWMsiiEKDweilUPwnUTBQQI.......KpLxLBVWSGiqKIumP...SDppRRhw................vvusuNBBTLsEqruv...umkqqskvNBBL..',
+    '..................................xBoBRWUxxyHtEqieEesvyUUAPUWMussfPVAfbgWDphURQORNI.......ATppDTUUHejyPnoC...TTBpRLH..................IvsuNBBPHrqrFl......mFqruIBBBN..',
+    '..................................LpBBDWUAJnKltiiiiiitwAVCPSWUMMMSVWVQNTWDhdUROOBRA.......SDdhLbnVPwMSURTC...LRBpL....................IvslNpQysErkF.......lHeEFJRoBo..',
+    '..................................JRRTVWVBLmKwuriiiiijvyVUMPUVVDpdVWVhdhWVBdUBLLANNI......OThoI.LDVohTopn....JpBLv....................IvkIhBRwrrku........lJjEFJQOBo..',
+    '..................................xTVVDVWDAJlHKGsqeiisuwUUMPPUWhhpSCVhdhWVpdVQxJLLAA......LpRd..IUThdRhox...IOBol.....................IglPhBxkskv..........HujtJRoBo..',
+    '..................................InCVTDVVCLKflHeiEeirjHSUPPCVUhhSyCVhhpWVDpRAJgHILLn.....yRx...gRohhRohI...NpNl......................JggShBmstHH...........KfsxRoBo..',
+    '....................................gVRTDVTPxvvGii3iieFHSVCPUVDpSyKCVhpDUSTQAnwHlvwnNl....LL....LDhhTpL....fOOd.......................JgmRhQmkvl............IjsxRoBo..',
+    '....................................QVDDDDVQLJIvei3iiitHCWPCDWUCMyySVhDVCPQAMyHlHllIPI.........JRThOTBI....JBI........................IgxRhNgvv.............JjjJRoBo..',
+    '...................................nUUVVVVVUNLIwteqiqtfKSWCSUUCMMPUVVDTTANNAALIHkulHLSP........JJJIdRd.....xn.........................INoRBxgKv.............xkjJRoBo..',
+    '..................................HAnCWWWVDVDLmJwGtestuKSWSUSAPPCVWVDTQAAALOPxmHFkHlICC.............I......v..........................JooRoxIl..............LlkJROm...',
+    '.................................wImJCVVWWVDSLmKuejGjevKSWSSMMPSUWWURQPAAANPCxHvGuGumSO.............................................uLxoBToxI...............HlImBN....',
+    '................................fQnIxoOTWWWQmyxHjqierkmMUWCMPPUUnoVTSRQAAPAnAAvvHujkmSP.............................................IBhopRhJ.................NNmON....',
+    '................................fCnILoQDWWUnHmMmkeqitwmCWUPASUVCfyUUSRRQQOLxxAnKvksuISP.............................................vNhoppx..................LOgNN....',
+    '................................fCoxLRDWWQxLvfPAvertvJxUWCCUUSSSMgCVRRRRRONLxAPglHulLUN.............................................vNhoRBH..................LOmNN....',
+    '................................fQRRDVWVRNxLIgxAmlkuIABWWCSUSCSUSyPWVVDTQOOOPxnJwukwNDN.............................................dBhBRx...................LBhOL....',
+    '.................................QTQCUVRAOLLALgLMJKILCWVCPCCCUUSPPUWVVVUTRRRAIIxmulJOOJ............................................LBhhpNv...................LRhBL....',
+    '.................................LmfbAVTOONAQAmnMgILSVWUPPCUUWVAPUVVVDRBQDRxLLLImmxoNf.............................................NBhoBx....................LpoBL....',
+    '....................................uSDUTRQSRNLAALLCWWCPCSUWWUQvbSVVDRONANNLLLxJxxAQx..............................................JBoOx.....................xBBpN....',
+    '...................................uxDpRUVVDRQOPQQTWWUPCUVVVSd..ePVVTQQONLxPoxxxLNQA..............................................ILBBx......................IBBBL....',
+    '...................................IQDpPRDVWVTTSDVWWVCUVVVVLf...fSVDRRQOLxNALLLNQRN..............................................lNBBn.......................IOBoH....',
+    '..................................HQBDRAAORRVWWWWWWCSUUUUUn....dSVDRRRQNANNNAOpRRNv..............................................lNox.......................JooBL.....',
+    '.................................wLANTSLLAPORDVVWWUAPPPCUm....dTVVTQQROQQONNORTxA...............................................JNOL........................xohBo.....',
+    '................................fQoxLTTnJMnLNNQTVWVCMyASP....JRVDDTQQRQCRRRDRLI.................................................gBLl........................LooBL.....',
+    '................................lQxxLTUxAMmIMnLOTDVCyyCdb...HoDTTTDTQTDDDVWRJ..................................................IBx..........................Npoh......',
+    '................................lQxLNTVQAMwwKnIyNCSSyySA....NTRRQQRSUVWWWWWg....................................................R...........................hpOf......',
+    '................................lOxoTVVUAMKuvMmvyAASSynSI...CRQQONPCRDDDTDDx...............................................................................xBpx.......',
+    '................................lSoQVVVVAAKkuynvlyLoSPnMF...LTRQOQSPNQRQONTn...............................................................................mBh........',
+    '................................fSQLdTDVQPJuuwPwfwyxnSUf....HNTRQRTOLAQQAAORw..............................................................................xBx........',
+    '................................fSntjADVQOKuslSKufHyJyPPK.....gQRRRRNxACPLLBAm............................................................................lph.........',
+    '.................................P..fPDVUQwjikPMvjuyMJmAJ......JxTRRQLxACNxAONm............................................................................L..........',
+    '....................................LACVVOGiijPAwjEuMxwnBI......vPTTRNxxQOxLAANJ......................................................................................',
+    '...................................fONBVWotiicPRJjieMAyxBI.......IUTROxILCAIxLLJK.....................................................................................',
+    '...................................nANBWWotiijSVNtiqMUVBBI........JUTQLwmPPwwJxIwIK...................................................................................',
+    '..................................NDoNRWWBvjjlUWCvqjMUVBpJ.........CDRAHvySyvvJIvHIy..................................................................................',
+    '..................................LQoNVWWWUPCUWWVPKMUVVopS..........NRPHumSPwuvJHuvyg.................................................................................',
+    '..................................LCxBVVVWDpdVVVWDRdVVVppJ..........JRAvklPSnujKxmulAP................................................................................',
+    '..................................LSoRUTDWDBdUSSVTpdUChDh...........LRLHsFMULGstPNllSS................................................................................',
+    '..................................LSCUTCSWVphSPCVDBdUMgUL...........LTLIuGPVCKtjyToAUT................................................................................',
+    '..................................LRynTCCVDhToACVpphAyCUx...........LDBAnnUVTMlswVThTT................................................................................',
+    '...................................A.fSQSVVDALAQVppCgyUUJ............hDTTTWWDRylnVTdpD................................................................................',
+    '.....................................lSORDUCLyMCVVSKvKyUJ............JTppRdAWDNIOVVhTT................................................................................',
+    '.....................................mSORSALLJnCWCwvHvmSx............lRBhN.JTDRoxoVpBL................................................................................',
+    '.....................................dSLOUALAnyPVnfvvuvPI............lQBhI..hDRpLgTTd.................................................................................',
+    '....................................LNMgoUAyPMwADPtftuvMm............dRBx...QTRpLfQN..................................................................................',
+    '....................................QAbfAVPynPwKCSgfcttvyI..........lBRo....NTBLH.L...................................................................................',
+    '....................................QMuvxTRygMvfySMKKvffCP...........QO.....ODNf......................................................................................',
+    '....................................PxlwJTTLIxHumPffwKMPCP.................lTBm.......................................................................................',
+    '....................................LJlwnRVQynyHvymcsuHgMLH.................NJ........................................................................................',
+    '......................................wMKCVTynxKuKPccstuHyw...........................................................................................................',
+    '......................................OPwAUULJLyklPbcccskmw...........................................................................................................',
+    '.......................................nIJoSAmxMluyPbccstlKl..........................................................................................................',
+    '.......................................lMvmCOImMKuvPgccccsfMf.........................................................................................................',
+    '.......................................LMbwQQLKnIsFmPMbcbbgPf.........................................................................................................',
+    '.......................................LyfHBTAynykjuMgtvKKyyf.........................................................................................................',
+    '.......................................AMfITDOAAxvskIgccccjlyu........................................................................................................',
+    '.......................................PAgLVVRAAAKksuMK3ccctKv........................................................................................................',
+    '.......................................NNxNxADNoPxHusyybccccfKK.......................................................................................................',
+    '.......................................JALOIfTRoOxlkuwPPba3ccyy.......................................................................................................',
+    '........................................JLl..LTxLPIvHlvyMKvvHym.......................................................................................................',
+    '........................................HH...NDLACAmvkkwPgfuvvGG......................................................................................................',
+    '.............................................LVNLQCnlvkGIlcccjtuv.....................................................................................................',
+    '.............................................xVBJhUAKmHjGMu3cccjll....................................................................................................',
+    '.............................................LVQxnCSnIKfuwwc3ccccuv...................................................................................................',
+    '.............................................JRTQJdSNJgvkkHK333cccfG..................................................................................................',
+    '..............................................lPQLlLUAmmvtuHKvuuvHyK..................................................................................................',
+    '................................................xOmxCSLwwHktHybfvwKHj.................................................................................................',
+    '................................................NOgIoUCJmwujtHu3cccsGu................................................................................................',
+    '................................................NQmmoUTPJmwGkuHucccckGk...............................................................................................',
+    '................................................LQmmLnPSPxnwvkvKfceecctF..............................................................................................',
+    '.................................................JInLblUROLnKvklyfbcccfwG.............................................................................................',
+    '.................................................lAhLfMOoCNLIwuklKMKHHHKH.............................................................................................',
+    '..................................................JxN..IooSOLIwuklyb3ccjkF............................................................................................',
+    '...................................................HA..IoxATAJwwukvlceccctk...........................................................................................',
+    '.......................................................MonoUUAJIwtsHH3ecccfG..........................................................................................',
+    '.......................................................AAxonPCLIHGkkHK33eccs..........................................................................................',
+    '........................................................mLLfvRPLwHHkuKHtceecG.........................................................................................',
+    '........................................................HoNI.xROLIwvkuylsFFvK.........................................................................................',
+    '.........................................................dOJ.GoTBLJKvkvHjcjkHH........................................................................................',
+    '..........................................................Iv..nURBLIwvuHf3ecsKm.......................................................................................',
+    '..............................................................IARROxJIGuwG3irvI.......................................................................................',
+    '...............................................................bCRQBLJwulKfcqtvv......................................................................................',
+    '................................................................MRpTNxJwulKcirfH......................................................................................',
+    '................................................................vNOdNLxIufKjeecFv.....................................................................................',
+    '.................................................................LL.LOLJHGvHurctyu....................................................................................',
+    '.................................................................J...NLLJHkwykruIk....................................................................................',
+    '.....................................................................lPLLJluKsisHf....................................................................................',
+    '......................................................................nOALwkHueeuvv...................................................................................',
+    '.......................................................................xNLIuvKGcFHK...................................................................................',
+    '........................................................................LALHlyHcjvK...................................................................................',
+    '.........................................................................xNmvmKkrFvw..................................................................................',
+    '.........................................................................PNJHlvHcEuI..................................................................................',
+    '..........................................................................ILIvlKjEjK..................................................................................',
+    '..........................................................................IQxHgMHrjHf.................................................................................',
+    '...........................................................................wLJgyKrEKu.................................................................................',
+    '...........................................................................bPLvlKteHk.................................................................................',
+    '............................................................................PLwlKHjGm.................................................................................',
+    '.............................................................................JLmKKktwJ................................................................................',
+    '.............................................................................IOIHIHEGy................................................................................',
+    '.............................................................................HLxlKHcvM................................................................................',
+    '..............................................................................lAHlHjHM................................................................................',
+    '..............................................................................LQKlHkHM................................................................................',
+    '...............................................................................LLvHkHM................................................................................',
+    '...............................................................................ILvHjHA................................................................................',
+    '...............................................................................LAmHjHA................................................................................',
+    '...............................................................................MOJKsHA................................................................................',
+    '................................................................................xAwkHA................................................................................',
+    '................................................................................ANmkKA................................................................................',
+    '................................................................................NOwuKA................................................................................',
+    '.................................................................................IyHMP................................................................................',
+    '.................................................................................lMILL................................................................................',
+    '.................................................................................uLxg.................................................................................',
+    '.................................................................................uLAL.................................................................................',
+    '.................................................................................uAoL.................................................................................',
+    '.................................................................................lNL..................................................................................',
+    '.................................................................................lOI..................................................................................',
+    '.................................................................................lNI..................................................................................',
+    '..................................................................................I...................................................................................',
+    '......................................................................................................................................................................'],
+  [
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................',
+    '.......JIIII..........................................................................................................................................................',
+    '......mRBooof.........................................................................................................................................................',
+    '.......NJhddhImv......................................................................................................................................................',
+    '........IOohhdddmII...................................................................................................................................................',
+    '..........NTBhhhdddLL.................................................................................................................................................',
+    '..........ILRQBBhdddddH...............................................................................................................................................',
+    '...........LRoNQRThdddddf.............................................................................................................................................',
+    '............gLnLQTRRBhdddm............................................................................................................................................',
+    '.............LmmLOSDRoohdblH..........................................................................................................................................',
+    '.............xlmHxAQRTRhhddbgJ........................................................................................................................................',
+    '..............yKkHyANQTUThhdddlH......................................................................................................................................',
+    '..............LIkuHJxLOTDTRdddddf.....................................................................................................................................',
+    '...............vusuHIJxNQTDRhddbdlf...................................................................................................................................',
+    '...............uHjsvmHIJLNRUDRhddddv..................................................................................................................................',
+    '...............vKjruvGuHJLNQDVphhddfu.................................................................................................................................',
+    '................HFEtvGtFvIxLQTVVphddfu................................................................................................................................',
+    '................kHEjGGtjFHIJLORDDTohdffl..............................................................................................................................',
+    '................kHjrFuussuwwIJAORUDBhdffv.............................................................................................................................',
+    '.................IjEjuGsEsvHvHJLNRVDpogfft............................................................................................................................',
+    '.................kFreFusEEFvvvHJAOQTVThmfff...........................................................................................................................',
+    '..................ujitutrEsuHvlHJLNRTVDBnfff..........................................................................................................................',
+    '..................GsisuusqqtHvuuHJLNQTVTOgdff.........................................................................................................................',
+    '..................vsisFGsqqrFHGkuHJLNQTVTBhdff........................................................................................................................',
+    '..................HsiqkvsiqqjGvukuHJLNQTVVphdff.......................................................................................................................',
+    '..................HkiisGsqqqqsvGttuHJLNORVVphdflt.....................................................................................................................',
+    '...................ktiEsFsiiiquvutsuHJLAORDVphdfl.....................................................................................................................',
+    '...................IHiqrGFiiiijGvFstuwJLNQTVVphdfl....................................................................................................................',
+    '...................JweqEGFiiiiqFGGFsFGHJAOQTVDBdffl...................................................................................................................',
+    '...................JHeqquFiiiiqrtvvtstGwJAOQTVDodffl..................................................................................................................',
+    '...................IHeqquFiiiiqqsuvFsFuvwxNOQDVTNdffG.................................................................................................................',
+    '...................IveqquFiiiiiqsjGFrsuuvILANRUVRhdbfw................................................................................................................',
+    '...................IHeqiuFiiiiiqrrGFrruGuHJLLNQDVpxfblk...............................................................................................................',
+    '...................IHiiiuFiiiiiiEjGFEEsuGlwJLNNRVDogbfl...............................................................................................................',
+    '...................IviieuFiiiiiiirGFEEEtlvvIxxLOTVThfbdm..............................................................................................................',
+    '...................vuiqssriiiiiiiruFqEEsuGulIJxLQDVBxfbdv.............................................................................................................',
+    '..................ukqirFeiiiiiiiitusqrtFuutuvIJLNQDDhdfdH.............................................................................................................',
+    '..................vjiirueiiiiiiiquFEEsFuFsFuuHJxLNTVRxddIl............................................................................................................',
+    '..................ujiirFeiiiiiiisusEttsuFjFukuHJxAQDVBmfdJ............................................................................................................',
+    '..................FjiisuqiiiiiiqttErusrFFssFGuGwJLLRWVodfI............................................................................................................',
+    '..................GriqsFqiiiiiiEFrqsGsEFuFstvGtHIxLOVVpIffg...........................................................................................................',
+    '................kHeiiEFjiiiiiiiFrqqsGsEFuFFFvGtGwJLAQDDNffgI...f......................................................................................................',
+    '................fHiiijFqiiiiiEssqqsFusruGtGuuvutHxxLNTWTxfdg..LAI.....................................................................................................',
+    '................utiiEsEiiiiiqstqqEFGuEruukGtkvGkHJJLARWDodfdJbMdl.....................................................................................................',
+    '...............vliiirsiiqiqsFsqqEFuGjEsuFtGsFHukvwJxLOUVTdddxbMfly....................................................................................................',
+    '...............usiiqEqiqqrjtsEqEsttsEsGGFkGkGwvukvKxLNQVVhdddLPljk....................................................................................................',
+    '..............HkiiirEiqqEstrqqEFsEEEsGvGFkGtGHHvkGIxxLNTVRdddOQvetm...................................................................................................',
+    '.............FsqiiqiqqErsEqErrrjrrsFGvGussHuGvHHkuwJxLARVVhddQRKeefH..................................................................................................',
+    '.............FiiiqEiqrsjjjsFGGutuGvvvGusskHGskwHuFvJxLAQTVhmdxRMfijI..................................................................................................',
+    '...........ttiiiiEqEstFstGvHHHHHvvHwHtjjsuGtrFHwvtGKKxLNRVVhdbhSmejK..................................................................................................',
+    '..........FseiiqsjsuullwmmmmmmImwwmIHuFFuvtjtuuwHuHHHyxLODVodbhUysjK..................................................................................................',
+    '.........jseiEesvIJLLLAOOOOOOOOOONNALmmvvvvuvGkIwlwHvKxLNTVphfdPPkjvm.................................................................................................',
+    '.......EtsejfwKJLNhddddddddddddddddddQQNNLxIwvlKKlwKHlJLAQDVRdfdSmjeLg................................................................................................',
+    '......GlllvInddddddddddddddddddhdddddddddhRNLxJJJwIJKvwKLNTVThfdSAseMm................................................................................................',
+    '......IxhhNNhddddddhhhBppppppppRphhhhdddddhhhhAAALxLKwlwJARDVhdfdPkeMI...LL...........................................................................................',
+    '....lgddddddhopRTTTTRRRRRTTTTTTTTTTDTphhhdddddhQNhONLywKxLNTVTolbCleMI...odh..........................................................................................',
+    '...vldhhhBRRTTRTDDRBONNNNNBNNNNOOBQRTTTTDphhhhdddbOOCCAynyARVVhlfSlcPI...JboJ.........................................................................................',
+    '..ldddooBBRRQBBONNooxxxxJJxxxxxxLLLNORTDDTpRpphhhddddBSAJJLQDVoIdPljPI...xbBx.........................................................................................',
+    '.NBooBBBooLxJJxJJIJJJJJwlvHHwIIIJJJLANNNNQTDVVpphddddhdhOALNDVBNxfejPI..dddpJ.........................................................................................',
+    '.JRLONNwIIlllGvluuuuvHIIvGkuGvvllvHwJLLLLNOQQRDVVRphddddNoAOTVpBLlsfQI.xhbhpI.........................................................................................',
+    '.IBI....lIlkkstuukssstvHwHGkkuGuuuuuHIJxJLNANOORTDVRBoddddQBTWDBOLvgRx.nhbhpJ.........................................................................................',
+    '..f.......cvkjstutsrrsskHwHuFsFuuFFGuvwHmILLLLNNQRDVDphhdddhTWVpQLmxDoJdbdopx.........................................................................................',
+    '............ultssFFsrrrstuvHGtjtFtFuuuGvHHIJxLLANORDVVDhhhddhpWDNIxTVhbbdopBI.........................................................................................',
+    '.............vvussuusrssrjFHwGFjsFFkGGuvHHwIxLLLLAORRTVVRBhhhhoQmIhDhdbdhppd.........................N................................................................',
+    '..............uGtjtutsrrrrjtuHltjsuuuvHvGHIJJJJLLLLOBBTDDTBohdhglmRhdbdhoppI........................fhB...............................................................',
+    '...............ulsrsutsrrrrrjuvlsruGuGHHlHJJIIwwyJILNORTVVVphhogvnThdhhpTph........................IdhB...............................................................',
+    '................vkErtGtjrrrrrjuvkssGvGuvvwwwlvHHJnIxAOQTVVVDpRRxlnThhBBRRL........................JmdhB...............................................................',
+    '................HvjErsukrrrrrtvvGtjGHusGHvuHulmJLLLLNOQTVThhhhhNmnTBpRRRO.........................LhbhB...............................................................',
+    '.................luEqruusrrrrsuvvFsGwutvHGtvHIxLAANBRTohpphhhhdOMmnQTRRNv.........................LhbhB...............................................................',
+    '.................kHjqEjGtjrrrruHvtsvwuuHuuHKJLoANBRBhBhhhpppRRRTPHfySTx...........................Nhbdd...............................................................',
+    '..................vjEqruGFrrrruHutsvwGuHuvyLLLNNBpRddhhhpDDDTohTSyHfgOI...........................NhdbbI..............................................................',
+    '..................uujqEslurEEruHussvwuGmHILNANQRhddhhppTTDVDBhhRQyHvyf............................NodbbJ...............HI.............................................',
+    '...................HkqqEkuEErruHFrsGvuvIJxAQRhddhhBppTTTTDVRdhBRJvvKH.............................Nphdbbd.............Ihdb............................................',
+    '...................HuqEqkurErsGGsrFufvIJxAQohhhhhhpTTTTDDVTodhpNvlwv..............................NTpddbdd............Lhdg............................................',
+    '...................HlEqqkurEruvtssFuvwJLANQhdhhhTTTRRRRTVVpdxOQIuKg...............................NTphdbbdg...........LBddb...........................................',
+    '...................vusqEuuEEtHussFuvIxLNQhdhhhRTTRRQQRRTVphghRLlvmu...............................wBTphdbbdI..........Lphbdm..........................................',
+    '....................JHEEuuEEtHtrsGHIxAOodhhhppTRBOOOQRTVVBhhBNHfKf.................................ODTBhdbbgd.........NThdbd..........................................',
+    '....................JwrEuuErGusjFHJxLOBhhhBpTTQBONNNQRDWVhgoRIklH..................................ODTppddbbgd........ODphbdg.........................................',
+    '....................IwrEuuEjGsstHILLOhhhhBTTTBNNNNANOTVDhdxORlkI...................................IRTTpohdbbdJ.......OVDBdbdI........................................',
+    '....................IwrEuursFssGIxAOOhhBpTTQONNLLLAORDWThdoQMtkw....................................dDTpphdb.bdI...I..ODDpdbbI........................................',
+    '....................IwrEtFsFssuwJLQhdhopTRBNNLLLJxAQDVWpgmRClslI....................................lRVTTphdbbbhdbLNJIdSVphdbdI.......................................',
+    '....................IwjEkFssstvJLOdhhpTTQNNALLJJJLNRVWphgoQPfulH.....................................lOVTRhhdbbbdOhdgmbyDpphdbdf......................................',
+    '....................HurEtussFvIxohhhRTROLLLJIJIwxNBTVVoxhBoKjvy............................vNLJIKG....QDVDpohdbbbhBoLJwfnDphddbhJ.....................................',
+    '...................JIeEEturtvIxohhBpTRNLLLJHvwIILORVVThgoRovjwL.............................NxffjjtF...gDVTphhdbbdhVRCMtlUTphdbdd.....................................',
+    '...................JIeErtFsGILNdhhRTOLALLxKHlwKJAQDVVhddORLujwL.............................bKwutskjuyrbCVWTBBddbbbhVVCuFdUTphdbdN....................................',
+    '...................JwerstsuwxNdhBRQoxJJJIIHHvILLNRVVRdghRCwskmw..............................HAMKvtjuKvlSWWVpphddbbbDWRHtfPTTphbdd....................................',
+    '...................JwerttkwxoohBRRLJJJwlHvuGHILNQTVDhddBTBGjKl................................gSPyHvuuwABVWWVRpddddddTUKGtbPDThdbdM..u................................',
+    '...................IHertuwxNdhBpRNxIIImGkGuuHILORTWTdddRRLujyl....................IIIIIJybjfflnTUCyKKwKyAVWWWDpohhdddTVyvFsfSDphdddmGw................................',
+    '...................lvejulJNhohRRNxJwulHHluGHlwLOTVTOddhTQwFjKu....................OxlfffkuHKKyATUUCRSPAMADWWWVDThhhhhVUAKwFjvCThhddSfemH..............................',
+    '..................IgjesvIoohoRQoLJwussGHHuuHlwAQDVhdddhTPmsjKu....................JIusjjejfflvnUVVVRBTVDDVWWWWVDpRhpxbgPUPwuclCphdhTfemI..............................',
+    '..................JleqtmNhhBpQNxJwkssssGwwuuHyAQDVhddhpRAvreKf.....................fJvvuuGvHyMSUUUUhbhBBpDWWWWWVDDpAfeemPbGHGclQphhUfeHI..............................',
+    '..................JueruJhhhRRoxIvkusjsjkHIHvILNRVDdfdoDBxurcw.......................vKyKKwIASUPymmSThdbbboVVWWWVVDVPtrqlyeiejGkfQppVfewI..............................',
+    '..................HkEjlxhoRQNxIHuuuFFsjstwIKyNQDVpdfdoVBJkFG.........................GMPPAPCSPusstMUpphddbddhWWWWVWUKHuwPsqiiesfmATVleuI..............................',
+    '.................vkjjHxdhRQoxJHuuFtsuGtrsHyLLQTVTdddxRVBJjuw.................xJJJIJ...gURRUUgfeqjsgSVVphhddbdhTWWWWVPyKPSHFqiiisufmnKkcHM.............................',
+    '.................IfEknhhRpoxIvGFFssstuurrGnLARVVBdddOTpAJekH................gmlffflwvHAVUPyKHGGHKyPSVWVpphdddbdDVWWVQPPTUPKuEiiirGlfHvkku.............................',
+    '.................wjjvxhQQAxKvsssrrrrrsGFEsKLNRWphdddTRoLJekH...............vxmfjjjfwnCUVSwutsskMMKMSTWWDTpBhdbddxxLSCQRDVUSyGsiiiEHGjkHjkm............................',
+    '................vljkmxoTOxwGtsssssrEErturjILOTWodddhURLLKekw................lxKHvvmxoBUUnlsiiiiGvfKACTVWWDppBhhddffwMPCUVWWVAvriiieHucetskl...........................',
+    '................KfslmoTQLIvuuGGGvGtrrEjGssIAQDVhddddoTALJeEv.................HLLnyAUUSLIwHGjiijlMMPPCRUWWVTRpoBNmutFvKASUWWWWSwsiiiEusiiiilS..........................',
+    '...............fIjuIxQRLIlHvutuuuHvtrErsstmARDpddhmbHSNLJkicy.................mROBpTSwuttuuuKHuyPMMMPCCUWWWDTTppLvteeuvKPVWWCCSKsEiisGEiqilP..........................',
+    '...............JdfHxBRAwvGutjrrrrkGvtrEEsvmLDRdddhmjemCNLviEw.............GvGuLUVVSIusrEiisHKukHyAPPCCCDVWWVVDTRBLIHtsEFHSWC0aCSMvrisKtEtkgP..........................',
+    '..............ILfHIoTAwGFssssrrrrrtHHtrEtvIAVphhhOmuejyCAwsecK..........MwlfflmSWWPfriiiiifyfGvwMUUTTTRTTVVpVWVTRQLvGsiEtyWyY02SSMGsvPwkvwnP..........................',
+    '..............dLlIoRNIGtsjssrrrrrrjtHvsEsvIAWThBRBxmsesMSMveeK........ufmlkjsvKCVSwHGsFFjGKHkHnMAVhbbbbbbdpoTVDPPAKceFeiquUhY02yUUMwPSylwPm...........................',
+    '.............xNxmNpQIusrskllvvvtrrrjGwGrsHIAVVTDDROxlsekPPgjcKf.......MwktuvKyPSSIujjjKMwwMywKPSUWVTRhhddddbdTgffKmureseiEyUy00aUWSPPMyIMCv...........................',
+    '.............OhghBRJvssskkGKIJIvsrErFwHjsHJLODVVVTQNxvjeKPnkefJl......GmynKyACSUnuriiefKkkyAAPCUWWUVDphhhhhdhTJujuyMksFseijKSyySVUSAKvvHHPgkF.........................',
+    '.............QhgoQAvuuuuHu.....IlsErsHHjtwJxNTDDWWVROxljkPSwreHg........AMCPSSSMvjiiiGKkrtyCRRUSUUnPUVTRpphBpVAgvfPCIHuFrieetvKKwwvvvukjelvulj........................',
+    '............lohxRRIvvIw.........wGrrjHHsuIJJNTTTVVWVTNJljvCMjeHJ.........mVUVUyffktjswwssvMRRUUmyUyySUUWVVDDVVROJuwUSMKHGseeiiiqEjsstukssjeeejFF......................',
+    '............NhxhRLmJJfu.........JwjrsHwkGKmINDRQTVVWVRNJkjyPGeul.........lUVVPvFFGlKvfHkGKADUSyvySyHKySCSVWWWWDQHesmUTBPyKGsqiiiiqrrjuukjrrreieeF.....................',
+    '...........fBhhBBJJJI............lvrsGwlvwlIQDQNQTVWWVRLIkbMlEeju......GGLDUMvjeeeuHjjKmKACWSguuKPmKKyyyMSWWWThLvsicKUVVUUPwfsriiiiiqjuussjjrEiijf....................',
+    '...........fBhhRAJJ..............lwjrsHwHHmLQTQANRDVWWTBLwjKMGqeFk...wllgOUUvsriitycqsyAACUoPvfuvyPvKKKyCUVhhBdoLuEieyWVdWWUSPHtsriiqqEsHKHsejEiifN...................',
+    '...........fBhOBow...............vIjrjvIwHmARTQLLPRDVVVTOLfkKMkqeH..jvllwSUnlkseEHKcEuMPQUMnPvtttKPgHKMSpppddpBBNJureuUVCWDbWWSyHusrqqqqjlSykrriilO...................',
+    '............BBBOI.................vHsjHIwmIOTROLxLQRDVWVRoKjsMwrieHwvuvKPUUgwygKvfKlsvMCUMfvymfttvySyyUDddhhpTRRRPIurtPVVWpbWddUPKvusEqqqefPKjriilN...................',
+    '............BBNI...................JfjHIHvLQTQLxJxNQTVVWVBLlefMGqijMKmnPSVUCPPSKFsMnlKPUyvtuKMfftuwPSPSDDDVDVVROAIyKjcMUUUUUWadhpSyKHFrqqqiGHjriilA...................',
+    '...........fBpx....................xkjHIvmARRNLyIJLORTDVVTAmjjMwfreKMCSRVWCyklPfijKnKMCUKcstuyyffHmKyCDxLNQnQTOLJblyscMUSyyPPUWabphCMwusEiqqtsEiilA...................',
+    '...........fBO.....................JujHIIJORQLwKJIxLORTVWVQJucfyMjqefSUDVSHtiqGsEslMAPSycccctlMmvvwKyMJ....fopNxxflJFevSUyKKKMUUWabphSyGsEEEEriiilL...................',
+    '............Bx.....................xujHwnAQRAIvmywIyLOTDVWTAvselKjiiebSVCKuEiisuqElyCSSgccccsfuyygKyM.....vNRBooLJIJGqePDnGFuySCPoDYaUhPvtsrqiiikmH...................',
+    '............v......................LljuwxQQOJvlwymwIxAQTDWWBLljlMljrievSowkqiiHvqqvLSSbKvacccsfHyMMI........hTQQPAxIHreKa3HstKSxffn3dbXUSMwurqieIL....................',
+    '...................................vIvkHLRQLwlmyAxgwJLOQRVWTOxwKMMKkjicPUAwFiEuKjrvASMccffacccFvvym..........xIlgTNxItesyCysswMf...JddbUY3UAvsjlI.....................',
+    '....................................IxlINROJmKMAPMmIJxLORDWVRALIfebMfrryUPMHkreKKuIPMbcccKbcckfumyv..............nPPxHeegDdksvK......wInabdbSmHH......................',
+    '....................................QLlxQRAwHKJMAAJIJxLNQTVWTNAxHrqlytrlUnlMsiEHMnLSyacacbMbcfvwMf................JRAJselbYHsvPA.......ddhhddPv.......................',
+    '....................................NxlARQnHvvvHxCMgJLAAOSVWVOAAMlqeygsvSylPueEfMPPPuaaaacbvyMyyK..................ORxGefddykkPbb.......Lfdphg........................',
+    '....................................NJlNQAmvvGGGwAAIILAAOSDWWROOQxGcsHulUPmSwFrjKSUMbaaaaccfymnM...................LTNvjcyUPusKbdf.........PL.........................',
+    '....................................NxmOLIwwwwmwILAymJNNORDWWVQQQNJFeuumUSASPKksKUUSPaaaaccckcgK....................LQnkevbYKesMSg....................................',
+    '....................................xxxQLJLPONNLnJAMIyNNOTWWWWRQRCLlsskKUUPmMSmvyUMbbbc2aaccscgS.....................MAGefbayerK3b....................................',
+    '...................................JoxLQANOdlldxLIMLJMNNRDWWWWVRTCLMKffAVUKjKPMwMUvaacbaaaaccbgC.....................LAHecMUPljG3dg...................................',
+    '...................................LoxOBOLL.....LAALJLNQDWWWWWVRRCnlvHySUolvKbKyCUfa22acaaccuPm......................wLKkjmdXPkkMSg...................................',
+    '...................................LoNQNH.......INPLJLQRWWDVWWVRRQyvkfwMPPlgHeHCUUba222aHbbfwSL.......................mPvjfhaUltKb3C..................................',
+    '...................................NoNOI.........LSLLNTVVVTUWWDCRCymwHFjbMwwKeGCUUba2222aGHGbPM.......................SSwjeMUbyuwdbnf.................................',
+    '...................................NBof..........LSLAQVWTRSUWWTQQAwwwkiqqjwCKeuAVUba22222cccayL.......................PSJteldXCyHnCbA.................................',
+    '...................................NNJ...........NRLOTVDROQDWWRNAKvttriiqquSMfkPWUgc22222aaaayL........................nPleeyhbPwydXSf................................',
+    '...................................NJ............NCATVVQCPBDWWBAJHueiEiiiijgPKfPUdfba2222aacayP........................LCmjecnXoMPdYS.................................',
+    '.................................................ORQVVTCAAQDWVAJHsesi3qiiiEfPwlPSa2ct2222acabUP........................JSxHjecgymb3Pf.................................',
+    '.................................................ODDDQAPoLCDWSIwfrqiiqiiiiEkMnmSMa22aFa22accKSA.........................fMyvkeeebddw..................................',
+    '................................................JxTTQNAxLARVVAfuujiiiiiiiqslPnMSKa2222ca2accbPP..........................IPyIltklMg...................................',
+    '...............................................dNBOONNMmLADWDxkstsiii3sFieunPnPPsa2222acactcaPP...........................gANLLxxl....................................',
+    '..............................................IOONAANAnJLCVWRxHjjuriissEirkMMgPMca22222cbGcaaPM............................LCJPNH.....................................',
+    '.............................................IxNNOANOLmMARVWRLwseettseiersfPMmSSGa222222aaaaaPA.......................................................................',
+    '...........................................uIxNQNNOPyJxAQDVWDNIkiirHjiiEsumRAmUgbaa222222acaaPN.......................................................................',
+    '..........................................FIJATQLNAymyLCTVWWSPnGsiierErkvHPDPPUbacaa2222accccPP.......................................................................',
+    '.........................................mJJARVAxNxlKMQTVVWVgdAwtriistumJnUSASPca2cca222ccccbSN.......................................................................',
+    '.......................................vJxLADWVLnPnKKPRDWWVnukKyvussuwJnoUTCCUy3a22aca2accccKUN.......................................................................',
+    '......................................kIxAQUVVVAyCnMPSTVWWSgFqeKygvwKMgmCDRBSPuca22aacacccvcfUL.......................................................................',
+    '.....................................MAoRDVVTDVLwPPASUVVWAnytiijwMLMmmwPURCQUmccaa2aafcbfFaclUx.......................................................................',
+    '.....................................lOVVVVTTVDxwMSRUDWWhyMyuriisfKwvmSUTQCTUycc3aaac2bKcaacyUL.......................................................................',
+    '......................................JVTRRRTDTAyLSTVWWCmwALwujrscwyxSUURQUUSyccccaacacaacagCUL.......................................................................',
+    '......................................xTBQQPOTVOnMCTWWUdvfKAywuuvwACDVDCRTVUdvlccccccaccccbMCUP.......................................................................',
+    '.....................................NRRQOALLQDRAACVWCnwkrjMPLJIKAUVVDQCTUCybfKcccccaacccbKCCUN.......................................................................',
+    '....................................NRRQOLxwmATTNORWWgmIkrjlCPPAARWVURQRUUwfscbKbccccccccmSSARA.......................................................................',
+    '...................................LTpBBOLwvImCDTRUWWnyyukGHuclUVVVVTRTUPmvtcccbKfccccsfbSUCPPL.......................................................................',
+    '...................................LTBOBNLwllHLUVUWWVPPCMKGeieevUVVDVUSSnKvutcccbbKfcccgUUUCyKJ.......................................................................',
+    '...................................LTBONmdywftmPUVWUdbbMybFeeq3eKSVVUSKmPymvffccccbmKKySWUCAHGHH......................................................................',
+    '...................................xTBOLmwflHfumQWWULvfyyfutE3iiewVRyKKKKMywvufccccvmdUVUSQAGsrtu.....................................................................',
+    '...................................LDBBLKHktHukvADWWDMmAPywtreEiisMCMKKKKyCywvutffccmSUDSSAIuEEqjG....................................................................',
+    '...................................ODpOLvkvscGuuwCWWWCyPmKMlkGeiqiGSCMyKyKySnwvllftgUVDSQSAvuFEqEsk...................................................................',
+    '..................................LVRBNxlFjqrjGfHAUWWVPMdvMyvjriiijMSPMyKyKySymygmyUVDSQAOPMvGsEqEGf..................................................................',
+    '.................................JNRQNMmJuqiiiruvyQVWWVCAKfwKktriiijwSPyyKKyyPPynyMSVTCPAAAAMwusrrjut.................................................................',
+    '.................................OBBRNJwIwtiiqijlwPUWWWVSAKmyyvjEiiisnSPyyKKKyCSAwbdUTCPNNAACAvtssErt.................................................................',
+    '................................kCBpTQLyfuujiiiqtwATWVTDVUPAywwusEiiqFMCPyyyMyASm...AQDQPPAACSPwuFFqju................................................................',
+    '................................lRBRVCALGeeFEeirsvyCWVPCUVSCMKmKkeEiiqkPSPyyyCVP......xRRCPPCRUSussiiFH...............................................................',
+    '................................dRBDDOAnHsi3rsqEjuKCWVPPCCUUCMyHuFjiiiEkPSoCUUDSJ......mNRRCTVDMrrsiiru...............................................................',
+    '...............................HxnOVDAxKIfriieieeuwCWVAPPPCUVSAwvjjsiiqEGAUUDCCCAf......GgCTDVUGqjGqiqlI..............................................................',
+    '...............................xxmRWRNIlKvsiiiiiEjHPWVAPPPMCUWRAMvfsiiiesHSTRCCPOL........HgUUKEqvKriiuK..............................................................',
+    '..............................PNxoUWROJubHueiiieqqGAWVAPMMPPPUVDCAwjiqirjjlPCCPPPLf........fSmFiEMPsiirkH.............................................................',
+    '..............................CQoQWWROAwsjktiiEqievAVVCPMPPPMPUWDCyjeqiiGseHPCPPAAL.......fMKtiisSStiiqjv.............................................................',
+    '..............................LTOTWWRoAxleEsriiiEskMVWCPPPMMMMCVWTAuesiitGqeHPCPANM.......MJHsiEKVTuqrtreG............................................................',
+    '..............................QTRUWWTAxJmuEesiiisFfMVWCMPMMMPPCWWRMtEujieGFqevPCNNAf.....lCNJusvUWDHrsKGqjfw..........................................................',
+    '...............................gADQUDOLnIlksi3iiieGLUWCMPPMMPSVWWNKriuuiiFvsiiuPANNJ......RRQLnCVWVwEiHKsifI..........................................................',
+    '................................SQAUDQOAIHvuEiiiisvLDWCMMMMPCWVVWAveiGKrieHHEiivPNNNf.....oThpVRRUUHqiuMtilJ..........................................................',
+    '................................mNAVDRQQIkkGvGeieGmLRWCPPMAVWURVVJuEiHMFiiFyHqqjPOoAf.....SThooLfLUmjevPvjmJ..........................................................',
+    '................................dLAVVQBQItEesjskFfvLTWCyCVWVUQCDUwsiiGPHiiiHPkjfSPoN......RVhNL..TDnGsKSwvoL..........................................................',
+    '...............................ANxNVWQNQLHjiiqijtjvLRWVUVWVURQCDUmsiitUyjiilSxMPUCoL......RDpx...TVRLnCUoPRL..........................................................',
+    '...............................SBxNVWTNQAJuqiiiiekJLRWWWVDRCSCSDUKFiiHVPGEiuUDQbRpNL......TTo....SVDohDVDhhx..........................................................',
+    '...............................CNLQVWVRNOAIuqeseEvLATVDSSRRRCCCRUAwfkLVUnucgVVQbBBoAj......O.....SVphdThphhx..........................................................',
+    '...............................PNLTWWVDNnCAmHGjekJAOWVCSQQQQCTgbSVUBSVWWUSCTVVRdRBxm............fNpohTphohhI..........................................................',
+    '...............................LpRVWWVVPnxPMwscvmLoTWDQQRRRRNd..PVDdhVVWWpddVVBdRRI............lOhhhThNhBBg...........................................................',
+    '................................NLhVVVVRAgnPljkIxoRVTQQRQLIKI...CpphDDRTUhddVpBRDn............vBpopRN..Lxl............................................................',
+    '...................................SVVVRNJJnwHwxABDVQQRSL......lTppWVRQQThpDpBBBx..............QQOoQd..x..............................................................',
+    '..................................gUDDDDQPImmwxNBRVTRRVm.......gVWVVRQOQThTToBBL...................J..................................................................',
+    '.................................IUDDVVDRQAJmIABTVVDRTO.......nTVVURQOPQTpDRBBJ.......................................................................................',
+    '.................................ITpDWWVDTCALAOTVThCPO.......oUDVDSCQQPQDDTROg........................................................................................',
+    '.................................dRQTVWWWVDRpRUVSI..........JDUUTSPPPOCTDURLv.........................................................................................',
+    '................................vNQRQQTVWWWWWWWUw..........JTTRTRONNOQVWOmL...........................................................................................',
+    '................................IoBUOxNRTDVVWWVn..........lRTRQQQRQQRVVoH.............................................................................................',
+    '................................IoBVOIJLNQRTVUBI...........LRpBOORRQQRTL..............................................................................................',
+    '................................IopVQJJJLAOQRRhI............ORQNANONAAOP..............................................................................................',
+    '................................IBQVQLJmJJANQQQJ............dRQNLxAALLACL.............................................................................................',
+    '................................IBRVCLImJmxAAATx.............JQOLLnALJLPBL............................................................................................',
+    '................................IImUSLwmymmyAoCOM.............ARQLJyALmxNAJ...........................................................................................',
+    '................................v.bCSLIlKKHmyLLAxv.............OQNymAAwwAAyI..........................................................................................',
+    '..................................ISUAwkvMwlyLJyAJ.............MRNLmMAKvJLLnI.........................................................................................',
+    '.................................xoTUAwtGMmuHMyHHIJ............AROLwyAMmlKLxnHv.......................................................................................',
+    '................................IJoTSyvttMxukyMvuuwJw..........NROAIwAAIuuyxmmlI......................................................................................',
+    '................................xooTCHsEsPLGEHMyuttwn..........ARRAIvMOLGkHyIvlmm.....................................................................................',
+    '................................LooVPuiisPPGieHPIuttyS..........NRoIlKQAHFtvJHllxO....................................................................................',
+    '................................LoQVPFiisSCvqiFPCwFkyK..........SRLIfwCSKuskyJllLQ....................................................................................',
+    '................................NRTVPvrElURKEiEMDPHfyK..........SToIkmSTAwtkyPmmOR....................................................................................',
+    '................................IxTWCylunWUysiEyVToACK..........SVpLmAVUQLutyUONTR....................................................................................',
+    '.................................lODVUSCDWVPljsMWVDdpy..........MTVTRUWVTCnmCVVdpR....................................................................................',
+    '.................................IOoVWDhDWWVSMPUVSUdpy...........gVThppTVDURpDVhpR....................................................................................',
+    '.................................IOoVVhhpDTWWpdDAgCdpy...........JVRhpdJTVTohpThpB....................................................................................',
+    '.................................JQoVVdVTAAUWhhSyvydog...........IVToL..dTRhhbOpN.....................................................................................',
+    '.................................xppVVpVQLLUVhTSwvwPn............IDTA...lQRpI.LBH.....................................................................................',
+    '.................................xTTopWDOLAUVhVPvvvMAw...........JDoH...fQRx..Id......................................................................................',
+    '.................................LOdmQUTNLPSVDWMfvvvnM............R.....IRRJ..........................................................................................',
+    '..................................IbICQSOxMPCUSSPnglmM.................JpNL...........................................................................................',
+    '...................................HALNUCnnMMyASgKyMPMb................xRw............................................................................................',
+    '...................................JxgNTSJgMKHyPftugKKK...............................................................................................................',
+    '...................................JxmNRUxwnMvKPbcsfuvyf..............................................................................................................',
+    '...................................JAJoTVPIgMmvMMbcsfuvK..............................................................................................................',
+    '...................................JNxNTWSxInKHwPgccjsfMl.............................................................................................................',
+    '...................................LBLNOQUNImywfyCbbbbbMI.............................................................................................................',
+    '...................................JBLLmgUQJmwKfHPMKKHKKg.............................................................................................................',
+    '....................................gOg.NUQAJmKluKKbccstKg............................................................................................................',
+    '....................................NL..NDQSPJIKfvKKcccckmG...........................................................................................................',
+    '........................................LUoOCxmvGfmy3ccccfv...........................................................................................................',
+    '........................................LTnxRCJvHkGwKceccjfK..........................................................................................................',
+    '........................................LSInRCLJHtsvMbbbccbwj.........................................................................................................',
+    '........................................JSnIQRNLIHtkHMMKKKKMf.........................................................................................................',
+    '........................................IRnIQTQNxIHktvKcklvvl.........................................................................................................',
+    '.........................................mJJLJLTNJwvjtHccccjvH........................................................................................................',
+    '..........................................InI.mUQLJwGkvybecccjG.......................................................................................................',
+    '..........................................IxI.mUQCNJHukHHcecccGl......................................................................................................',
+    '...........................................II.lSoPOLIHkfKHc3cccKI.....................................................................................................',
+    '...............................................LOgPOLmHtfwmfvGvym.....................................................................................................',
+    '...............................................mOmxSAJIvtuKKfuGvwv....................................................................................................',
+    '...............................................lPIJQSAJwvkuKbcccstH...................................................................................................',
+    '................................................AxnAUQAJHvkkKbcccjkuF.................................................................................................',
+    '.................................................LmxoORAKmvukKceccjuuG................................................................................................',
+    '.................................................HJLblRQAyIvuuKteeccfK................................................................................................',
+    '..................................................IAI.mDQALKvulHftsfvK................................................................................................',
+    '...................................................xI.SVTRNxJHfHMvtGHH................................................................................................',
+    '...................................................v..OVpQSNLwGkHc3ccjHH..............................................................................................',
+    '.......................................................oOxhRAJwufKceecttt.............................................................................................',
+    '.......................................................fOxmOQxIHuvKceccju.............................................................................................',
+    '........................................................NxmOToLJHfKf3eiEsG............................................................................................',
+    '........................................................IxhmdQNxIHlvGcccfKf...........................................................................................',
+    '.........................................................xBJ.POxLKuuyKFGHKk...........................................................................................',
+    '.........................................................IJ..mOOLJHtwHeettG...........................................................................................',
+    '..............................................................HNONIGfKjiecHw..........................................................................................',
+    '...............................................................nTQLvFfHeiEGw..........................................................................................',
+    '...............................................................CAgNLGfKGcesHv.........................................................................................',
+    '................................................................HlQNwulKHrijGG........................................................................................',
+    '.................................................................lNOxHlHHeiEHH........................................................................................',
+    '..................................................................lLAnmkfFqEuH........................................................................................',
+    '...................................................................wLxJuuHcitwf.......................................................................................',
+    '....................................................................gPxmGGsesHH.......................................................................................',
+    '....................................................................JPxItjHcEuH.......................................................................................',
+    '.....................................................................lMJujHFeFH.......................................................................................',
+    '......................................................................MLmsuG3Evv......................................................................................',
+    '.......................................................................LAujHsEtK......................................................................................',
+    '.......................................................................MPlcHHesI......................................................................................',
+    '.......................................................................GKKtuHirw......................................................................................',
+    '........................................................................JMuuHerH......................................................................................',
+    '........................................................................LPvvHrcH......................................................................................',
+    '........................................................................LOJHlseH......................................................................................',
+    '.........................................................................ILKuFjH......................................................................................',
+    '..........................................................................AytstK......................................................................................',
+    '..........................................................................ALFisK......................................................................................',
+    '..........................................................................fLuisyf.....................................................................................',
+    '...........................................................................yvEkMf.....................................................................................',
+    '...........................................................................ImskMf.....................................................................................',
+    '...........................................................................JLulM......................................................................................',
+    '...........................................................................mLmmw......................................................................................',
+    '............................................................................Ixox......................................................................................',
+    '............................................................................Iom.......................................................................................',
+    '............................................................................INI.......................................................................................',
+    '............................................................................Jn........................................................................................',
+    '............................................................................v.........................................................................................',
+    '......................................................................................................................................................................',
+    '......................................................................................................................................................................']];
+const DIMG = DRAGON.map(fr => [false, true].map(flip => {   // [牆在左, 牆在右（鏡射）]
+  const c = document.createElement('canvas'); c.width = fr[0].length; c.height = fr.length; const g = c.getContext('2d');
+  fr.forEach((r, y) => { for (let x = 0; x < r.length; x++) { const ch = flip ? r[r.length - 1 - x] : r[x]; if (ch !== '.') { g.fillStyle = DPAL[ch]; g.fillRect(x, y, 1, 1); } } });
+  return c; }));
+// 火焰分色帶（火柱、蓄力、火星、火焰平台共用）：黃白 → 黃 → 橘 → 橘紅 → 暗紅；煙：深灰
+const FIRE_C = ['#fff4b0', '#ffd060', '#ff8a20', '#c23b3c', '#82232c'], SMOKE_C = ['#5d6474', '#3a3a48'];
+// 火龍的影子（1–2 px 暗色投影，讓龍貼在牆上）
+const DSHADOW = DIMG.map(pair => pair.map(img => { const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d');
+  g.drawImage(img, 0, 0); g.globalCompositeOperation = 'source-in'; g.fillStyle = '#07060b'; g.fillRect(0, 0, c.width, c.height); return c; }));
+// 6 秒：0–1 s 從牆裡爬出、1–1.6 s 抬頭、1.6–5 s 吐火 3 次、5–6 s 縮回去。
+// 每口火 1.13 秒：前 0.25 秒蓄力（第 2 格，嘴裡的火是龍圖畫的，程式不另外畫光）→ 0.65 秒火柱（前 0.25 秒由短變長）→ 休息
+function dragonPose(t) {
+  const DW = DIMG[0][0].width; let out = 0, f = 0, fire = -1, wind = -1;
+  if (t < 1) { out = t; f = Math.floor(t * 6) % 2 ? 0 : 1; }
+  else if (t < 1.6) { out = 1; f = 0; }
+  else if (t < 5) { out = 1; const k = (t - 1.6) % (3.4 / 3); if (k < 0.25) { f = 2; wind = k / 0.25; } else if (k < 0.9) { f = 3; fire = k - 0.25; } else f = 0; }
+  else { out = Math.max(0, 6 - t); f = Math.floor(t * 6) % 2 ? 0 : 1; }
+  const ease = 1 - (1 - out) * (1 - out);
+  return { f, fire, wind, dx: -DW + ease * DW };   // dx：牆在左時圖的左邊位置；fire = 火柱噴了幾秒（-1 = 沒噴）
+}
+// 火龍位置：規格 stairs-v1.4 固定 y = 250，以頭為準（v13i：吐火格的眼睛在 y = 250），整段 6 秒都不跟著捲動。
+// 全身圖 166×281：圖的上緣 y = 137、尾巴尖 ≈ 418，碰不到下方 570–618 的觸控箭頭
+const DRAGON_HEAD_Y = 250, DRAGON_Y = DRAGON_HEAD_Y - DEYE[3][1];
+function dragonY() { return DRAGON_Y; }
+function dragonMouth(f = 3) {   // 嘴（火柱起點）在畫面上的位置
+  const { dx } = dragonPose(clock - dragon.t0), R = dragon.side > 0, img = DIMG[f][R ? 1 : 0], x = R ? W - img.width - dx : dx, [mx, my] = DMOUTH[f];
+  return [R ? x + img.width - mx : x + mx, dragonY() + my];
+}
+// 火柱：預先畫好 5 種長度（由短變長用）× 6 格形狀動畫 × 左右兩向。錐形：嘴邊寬 8 px、最遠 40 px、長 140 px，方向 = 吐火格嘴張開的方向（往中間偏下 DCOL_DEG 度，牆在右時鏡像）。
+// 上下邊緣各用兩個正弦波捲動晃動；用硬邊分色帶（中心黃白 → 黃 → 橘 → 橘紅，尾端暗紅，最尾段碎開）
+const COL_ANG = DCOL_DEG * Math.PI / 180, COL_L = [28, 56, 84, 112, 140], COL_OX = 2, COL_OY = 24,   // 角度 = 吐火格嘴張開的方向（DCOL_DEG，從兩顎的邊量出來）
+  COL_W = Math.ceil(COL_OX + 140 * Math.cos(COL_ANG) + 30), COL_H = Math.ceil(COL_OY + 140 * Math.sin(COL_ANG) + 30);   // 畫布大小跟著角度算，整根錐形（含晃動）都放得下
+const COL = [1, -1].map(dir => COL_L.map(L => [0, 1, 2, 3, 4, 5].map(f => {
+  const c = document.createElement('canvas'); c.width = COL_W; c.height = COL_H; const g = c.getContext('2d'), img = g.createImageData(COL_W, COL_H);
+  const rgb = FIRE_C.map(h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))), ph = f * Math.PI / 3, cs = Math.cos(COL_ANG), sn = Math.sin(COL_ANG);
+  for (let py = 0; py < COL_H; py++) for (let px = 0; px < COL_W; px++) {
+    const ddx = px + 0.5 - COL_OX, ddy = py + 0.5 - COL_OY, u = ddx * cs + ddy * sn, v = -ddx * sn + ddy * cs;
+    if (u < 0 || u > L) continue;
+    const t = u / L, hw = Math.min((4 + 16 * Math.pow(t, 0.85)) * Math.min(1, 0.55 + u / 8), 2 + u * 0.4);   // 根部收細：從兩顎中間細細出來，離嘴 ~20 px 才變回原本的錐形
+    const wob = Math.min(1, u / 24);   // 邊緣晃動從嘴邊往外慢慢變大（嘴邊不會斷開）
+    const top = hw + wob * (2.0 * Math.sin(u * 0.17 - ph) + 1.3 * Math.sin(u * 0.43 + 2 * ph)), bot = hw + wob * (2.0 * Math.sin(u * 0.15 + ph + 1.3) + 1.3 * Math.sin(u * 0.39 - 2 * ph + 0.5));
+    const e = v < 0 ? -v / Math.max(1, top) : v / Math.max(1, bot); if (e > 1) continue;
+    const hsh = (Math.sin(px * 12.9898 + py * 78.233 + f * 37.719) * 43758.5453) % 1, hh = hsh < 0 ? hsh + 1 : hsh;
+    if (t > 0.8 && hh < (t - 0.8) / 0.2 * 0.85) continue;                                  // 尾端碎開
+    let band = e < 0.3 ? 0 : e < 0.55 ? 1 : e < 0.78 ? 2 : 3;
+    if (t > 0.7 && band === 0) band = 1; if (t > 0.78) band++; if (t > 0.9) band++;
+    band = Math.min(4, band);
+    const k = (py * COL_W + (dir > 0 ? px : COL_W - 1 - px)) * 4, [r, gg, b] = rgb[band];
+    img.data[k] = r; img.data[k + 1] = gg; img.data[k + 2] = b; img.data[k + 3] = 255;
+  }
+  g.putImageData(img, 0, 0); return c;
+})));
+const fillPx = (c, x, y, s = 1) => { ctx.fillStyle = c; ctx.fillRect(snap(x), snap(y), s, s); };
+function drawDragon() {   // 畫在背景（石牆、火把、火光）之後、平台之前：牆上任何東西都不會蓋到龍
+  if (!dragon) return;
+  const t = clock - dragon.t0, { f, dx } = dragonPose(t), R = dragon.side > 0, img = DIMG[f][R ? 1 : 0], y = dragonY();
+  const x = R ? W - img.width - dx : dx;
+  ctx.globalAlpha = 0.55; blit(DSHADOW[f][R ? 1 : 0], x + (R ? -2 : 2), y + 2); ctx.globalAlpha = 1;   // 牆上的投影
+  blit(img, x, y);
+}
+// 小火球 9×9：同一套分色帶（中心黃白 → 黃 → 橘 → 橘紅外框），硬邊像素
+const BALL_IMG = (() => { const c = document.createElement('canvas'); c.width = c.height = 9; const g = c.getContext('2d');
+  for (let y = 0; y < 9; y++) for (let x = 0; x < 9; x++) { const d = Math.hypot(x - 4, y - 4); if (d > 4.3) continue;
+    g.fillStyle = FIRE_C[d < 1.3 ? 0 : d < 2.4 ? 1 : d < 3.4 ? 2 : 3]; g.fillRect(x, y, 1, 1); }
+  return c; })();
+// 火球位置：從嘴沿弧線飛到平台「現在」的位置（平台在捲，終點跟著平台走，落地剛好在平台上）
+function ballPos(b, at = clock) {
+  const s = Math.max(0, Math.min(1, (at - b.go) / (b.at - b.go))), tx = b.p.x + pw(b.p) / 2, ty = b.p.y - 4;
+  const d = Math.hypot(tx - b.from[0], ty - b.from[1]), arc = (24 + d * 0.18) * 4 * s * (1 - s);
+  return [b.from[0] + (tx - b.from[0]) * s, b.from[1] + (ty - b.from[1]) * s - arc, s];
+}
+function drawBalls() {
+  for (const b of balls) {
+    if (clock < b.go) continue;
+    for (let k = 3; k >= 1; k--) { const [x, y] = ballPos(b, clock - k * 0.035); if (clock - k * 0.035 < b.go) continue;   // 拖尾 3 顆火星：越後面越小越暗
+      fillPx(FIRE_C[k], x + Math.sin(clock * 30 + k) * 1.5, y + (k * 2) - 1, k === 1 ? 3 : 2); }
+    const [x, y] = ballPos(b); blit(BALL_IMG, x - 4, y - 4);
+  }
+}
+function drawBreath() {   // 火柱、火星和煙：畫在平台前面、人後面
+  if (!dragon) return;
+  dragon.drawnO = null;
+  const t = clock - dragon.t0, { fire } = dragonPose(t), R = dragon.side > 0, dir = R ? -1 : 1;
+  // 蓄力格：嘴裡的火已經畫在龍圖上，程式不再另外畫喉嚨光（v13j 拿掉，兩個不會疊在一起）
+  if (fire < 0) return;
+  const [mx, my] = dragonMouth(3), li = Math.min(4, Math.floor(fire / 0.05)), L = COL_L[li], fr = Math.floor(clock * 12) % 6;
+  const bx = R ? mx - (COL_W - COL_OX) : mx - COL_OX, by = my - COL_OY;
+  blit(COL[R ? 1 : 0][li][fr], bx, by);
+  dragon.drawnO = ['col', R ? bx + COL_W - COL_OX : bx + COL_OX, by + COL_OY];   // 測試用：火柱圖的起點實際落在哪（應該 = 嘴）
+  const cs = Math.cos(COL_ANG), sn = Math.sin(COL_ANG), tx = mx + dir * L * 0.9 * cs, ty = my + L * 0.9 * sn;   // 尾端
+  if (li < 4) return;
+  for (let k = 0; k < 9; k++) {   // 火星：2–3 px，從尾端往上飄、越來越暗、最後熄滅
+    const a = (clock * 1.1 + k * 0.1234 + Math.sin(k * 7.3) * 0.5 + 1) % 1; if (a > 0.85) continue;
+    const ex = tx + dir * (a * 14 + (k % 3) * 5) + Math.sin(k * 3.1 + a * 6) * 3, ey = ty + ((k * 37) % 25 - 12) - a * 34;
+    fillPx(FIRE_C[1 + Math.min(3, Math.floor(a * 4.7))], ex, ey, a < 0.35 ? 3 : 2);
+  }
+  for (let k = 0; k < 5; k++) {   // 煙：深灰小塊往上飄
+    const a = (clock * 0.7 + k * 0.2) % 1, ex = tx + dir * (8 + k * 4 + a * 10), ey = ty - 6 - a * 40 + ((k * 13) % 9);
+    fillPx(SMOKE_C[a < 0.5 ? 0 : 1], ex, ey, a < 0.6 ? 4 : 3);
+  }
+}
+const GIRL = 32;   // 女孩圖 32×40（28×36 版 Yi Way 沒選，已拿掉）。碰撞範圍一樣是 20×26，腳底對齊
+// 城堡深井背景（參考 art/bg_castle_A.jpg 重畫，v1.3 第二版）：兩側是有厚度的哥德式石牆——突出的石柱、橫向簷口、深框拱窗、
+// 磚塊有亮面暗面和青苔，火把照亮附近的石頭；中間是霧和遠處的塔，壓暗、低對比。背景自己 24 色，事先畫在 360×960 的畫布上，上下接得起來
+const BG_H = 960;
+const BGPAL = ['#0b0a14', '#110f1e', '#171428', '#1e1a33', '#262041',   // 0–4 深處、霧
+  '#120e16', '#1c1620', '#2a2130', '#3a2e3c', '#4e3e4a',                 // 5–9 石頭：最暗→最亮（沒照到火光）
+  '#4a3226', '#6e4a32', '#94653e', '#c08a50',                            // 10–13 火光照到的石頭
+  '#2c2a4e', '#55489a', '#8a7ad8', '#c0b4f0',                            // 14–17 拱窗（窗格→最亮的光）
+  '#1e2a1a', '#34482a', '#3a3550', '#07060b', '#5e4a3a', '#2a2a24'];      // 18–19 青苔、20 鏈子、21 窗洞深處、22–23 火把架
+const FLAME_C = ['#a8402a', '#e8702a', '#ffb040', '#fff0b0'];
+const SIDE = 66, PIL0 = 40, PIL1 = 60;   // 牆寬；石柱在 x 40–59（右邊對稱），牆最外側另有一根半露的柱子 x 0–7
+// 每側的擺設（背景座標，左邊；右邊鏡射）。火把 [x, 杯口 y]
+const LAYOUT = [{ torch: [[50, 190], [50, 650]], win: [60, 470], cornice: [310, 770] },
+                { torch: [[50, 420], [50, 880]], win: [250, 690], cornice: [130, 560] }];
+const TORCHES = [...LAYOUT[0].torch.map(([x, y]) => [x, y]), ...LAYOUT[1].torch.map(([x, y]) => [W - 1 - x, y])];
+const BG = (() => {
+  const c = document.createElement('canvas'); c.width = W; c.height = BG_H; const g = c.getContext('2d'), rnd = mulberry32(2026);
+  const TAU = Math.PI * 2, bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5], bay = (x, y) => bayer[(y & 3) * 4 + (x & 3)] / 16;
+  const buf = new Uint8Array(W * BG_H);          // 每格存色號
+  const tone = new Int8Array(W * BG_H).fill(-1); // 牆的明暗 0–4（之後再依火光換成暖色）；-1 = 不是石頭
+  const wy = y => ((y % BG_H) + BG_H) % BG_H;
+  const set = (x, y, i) => { if (x >= 0 && x < W) { const k = wy(y) * W + x; buf[k] = i; tone[k] = -1; } };
+  const st = (x, y, t) => { if (x >= 0 && x < W) tone[wy(y) * W + x] = Math.max(0, Math.min(4, t)); };
+  // 1. 中間：霧（週期 960 的波，抖色成 0–2 號色）
+  for (let y = 0; y < BG_H; y++) for (let x = 0; x < W; x++) {
+    const cx = 1 - Math.abs(x - W / 2) / (W / 2);
+    const f = 1.1 + 1.3 * cx + 0.45 * Math.sin(TAU * y / BG_H * 2 + x / 60) + 0.3 * Math.sin(TAU * y / BG_H * 5 + x / 35 + 1.7);
+    buf[y * W + x] = Math.floor(Math.max(0, Math.min(2.99, f + bay(x, y) - 0.5)));
+  }
+  // 2. 遠處的塔：比霧暗一階，有尖頂、拱形小窗、一側陰影
+  const rect = (x, y, w, h, i) => { for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) set(Math.round(x + xx), y + yy, i); };
+  for (let k = 0; k < 10; k++) {
+    const w = 22 + Math.floor(rnd() * 26), x = 72 + Math.floor(rnd() * (W - 144 - w)), y = Math.floor(rnd() * BG_H), h = 110 + Math.floor(rnd() * 150), cl = k < 4 ? 0 : 1;
+    rect(x, y, w, h, cl); rect(x + w - 3, y, 3, h, 0);
+    for (let i = 0; i < w + 4; i += 4) rect(x - 2 + i, y - 4, 2, 4, cl);
+    for (let r = 0; r < w / 2; r += 2) rect(x + r, y - 6 - Math.round(r * 1.4), w - 2 * r, 3, cl);
+    for (let yy = y + 16; yy < y + h - 24; yy += 34) if (rnd() < 0.7) { const wx = x + 5 + Math.floor(rnd() * (w - 14)); rect(wx, yy + 1, 4, 8, cl + 2); rect(wx + 1, yy, 2, 1, cl + 2); rect(wx + 1, yy + 2, 2, 5, cl + 3); }
+  }
+  // 3. 兩側石牆（先畫左邊的形狀，右邊用鏡射座標）
+  for (let side = 0; side < 2; side++) {
+    const L = LAYOUT[side], X = x => side ? W - 1 - x : x;
+    const T = (x, y, t) => st(X(x), y, t), P = (x, y, i) => set(X(x), y, i);
+    // 3a. 後面的磚牆：每塊磚上緣、左緣亮，下緣、右緣暗，中間的磚縫最暗；越靠中間越暗（凹進去）
+    for (let row = 0; row < BG_H / 7; row++) {
+      let x = -Math.floor(rnd() * 14); const y = row * 7;
+      while (x < PIL1 + 7) {
+        const bw = 10 + Math.floor(rnd() * 7), face = 2 + (rnd() < 0.25 ? 1 : rnd() < 0.2 ? -1 : 0);
+        for (let yy = 0; yy < 7; yy++) for (let xx = 0; xx < bw; xx++) {
+          const ax = x + xx; if (ax < 0 || ax >= PIL1 + 7) continue;
+          let t = yy === 6 || xx === bw - 1 ? 0 : yy === 0 || xx === 0 ? face + 1 : yy === 5 || xx === bw - 2 ? face - 1 : face;
+          t -= 1;                                                           // 柱子之間的牆凹進去，比柱子暗一階
+          if (ax >= PIL1) t -= 1;                                           // 柱子後面那一小段牆：退在陰影裡
+          if (ax >= PIL0 - 3 && ax < PIL0) t = 0;                           // 石柱在牆上的影子
+          if (t > 0 && rnd() < 0.04) t--;                                   // 石頭表面的小坑
+          T(ax, y + yy, t);
+        }
+        if (rnd() < 0.08) for (let xx = 1; xx < bw - 1; xx++) if (rnd() < 0.6) P(x + xx, y + (rnd() < 0.5 ? 0 : 1), rnd() < 0.5 ? 18 : 19);   // 磚上的青苔
+        x += bw;
+      }
+    }
+    // 3b. 突出的石柱：左緣受光、右緣陰影，大石塊每 14 px 一段；柱子投影落在旁邊的霧上
+    const pt = [4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 0, 0, 0];   // 石柱橫切面：左邊受光、右邊轉進陰影
+    const op = [2, 3, 3, 2, 2, 1, 0, 0];                                       // 外側半露的柱子
+    for (let y = 0; y < BG_H; y++) {
+      const block = Math.floor(y / 16), my = y % 16, bump = block % 2 ? 1 : 0;
+      for (let i = 0; i < PIL1 - PIL0; i++) T(PIL0 + i, y, my === 15 ? 0 : my === 0 ? Math.min(4, pt[i] + 1) : pt[i] - ((i + bump * 7) % 13 === 9 && my > 4 && my < 11 ? 1 : 0));
+      for (let i = 0; i < 8; i++) T(i, y, my === 15 ? 0 : op[i] + (my === 0 ? 1 : 0));
+    }
+    for (let y = 0; y < BG_H; y++) for (let i = 0; i < 6; i++) { const ax = X(PIL1 + 7 + i), k = y * W + ax; if (tone[k] < 0 && bay(ax, y) < 0.9 - i * 0.15) buf[k] = i < 2 ? 21 : 0; }   // 石柱投在霧上的影子
+    // 3c. 深框拱窗：外框亮石（左上亮、右下暗）→ 黑色深洞 → 紫色玻璃＋窗格；下面有窗台
+    for (const wy0 of L.win) {
+      const cx = 22.5, R = 12, top = wy0, h = 58;
+      for (let yy = -6; yy < h + 6; yy++) for (let x = 8; x < 38; x++) {
+        const y = top + yy, ay = yy - R, dx = x - cx;
+        const dist = yy < R ? Math.hypot(dx, ay) : Math.abs(dx);   // 到拱心的距離（上面是半圓，下面是直的）
+        if (yy >= h) { T(x, y, yy === h ? 4 : yy < h + 3 ? 3 : yy < h + 5 ? 1 : 0); continue; }   // 窗台
+        if (yy < 0 && dist > R + 5.5) continue;
+        if (dist > R + 5.5) continue;
+        if (dist > R + 3) T(x, y, 0);                                              // 框外的接縫陰影
+        else if (dist > R) T(x, y, dx < 0 || ay < -R + 5 ? 4 : dist > R + 1.5 ? 2 : 1);   // 外框（左上亮、右下暗）
+        else if (dist > R - 3) P(x, y, dx > 0 ? 21 : 5);                         // 深洞（窗台很厚）
+        else {
+          let i = yy < R + 4 ? 17 : yy < R + 14 ? 16 : 15;                          // 越上面越亮
+          if (bay(x, y) > 0.7 && i > 15) i--;
+          if (Math.abs(dx) < 1 || yy === R + 8 || yy === R + 26 || (yy < R && Math.abs(Math.abs(dx) - (R - 3 - yy) * 0.5) < 0.6)) i = 14;   // 窗格、花窗
+          if (dx > R - 5) i = Math.min(i, 15);                                      // 右邊在框的陰影裡
+          P(x, y, i);
+        }
+      }
+    }
+    // 3d. 橫向簷口：上面受光、下面深影，下面一排托石；簷口上長青苔，牆上留一條投影
+    for (const cy of L.cornice) {
+      const ct = [4, 4, 3, 3, 2, 2, 3, 2, 1, 1, 0, 0];   // 12 px 高：上面兩層線腳受光、下面轉暗
+      for (let x = 0; x < PIL1 + 6; x++) { for (let r = 0; r < 12; r++) T(x, cy + r, x >= PIL1 + 3 ? ct[r] - 2 : ct[r]); for (let r = 12; r < 17; r++) T(x, cy + r, r < 15 ? 0 : 1); }   // 下面一條深影
+      for (let x = 2; x < PIL1; x += 9) for (let r = 12; r < 19; r++) for (let i = 0; i < 6; i++) T(x + i, cy + r, r === 18 ? 0 : i === 0 ? 3 : i >= 4 ? 1 : 2);   // 托石
+      for (let x = 0; x < PIL1 + 3; x++) { if (rnd() < 0.55) P(x, cy - 1, rnd() < 0.5 ? 19 : 18); if (rnd() < 0.18) for (let r = 0; r < 2 + Math.floor(rnd() * 6); r++) P(x, cy + 12 + r, r < 2 ? 19 : 18); }
+    }
+    // 3e. 火把架（貼在石柱上）：底座、斜臂、杯子；高 12 px，火焰再往上 16 px
+    for (const [tx, ty] of L.torch) {
+      for (let r = 0; r < 9; r++) for (let i = -2; i <= 2; i++) P(tx + i, ty + 5 + r, r === 0 || r === 8 ? 22 : i === -2 ? 22 : 23);   // 釘在柱子上的底座
+      for (let r = 0; r < 4; r++) { P(tx, ty + 3 + r, 22); P(tx + 1, ty + 3 + r, 23); }                                       // 臂
+      for (let i = -4; i <= 4; i++) { P(tx + i, ty, 22); P(tx + i, ty + 1, 23); } for (let i = -3; i <= 3; i++) P(tx + i, ty + 2, 23);   // 杯子
+    }
+  }
+  // 4. 把石頭的明暗換成顏色：離火把越近越暖、越亮（半徑 80 px，用抖色過渡）
+  for (let y = 0; y < BG_H; y++) for (let x = 0; x < W; x++) {
+    const k = y * W + x, t = tone[k]; if (t < 0) continue;
+    let lit = 0;
+    for (const [tx, ty] of TORCHES) { const dy = ((y - (ty - 8) + BG_H * 1.5) % BG_H) - BG_H / 2, r = Math.hypot(x - tx, dy); if (r < 84) lit = Math.max(lit, Math.pow(1 - r / 84, 1.5)); }
+    const v = lit * 3 + bay(x, y) - 0.5;
+    buf[k] = v >= 0.5 ? 10 + Math.max(0, Math.min(3, Math.floor(t * 0.7 + lit * 1.7 + bay(x, y) * 0.6 - 0.9))) : 5 + t;   // 照到的地方也保留亮面暗面
+  }
+  // 5. 吊鏈 3 條，細，只在兩側牆邊（不穿過中間平台區）
+  for (const [x, y0, len] of [[PIL1 + 4, 0, BG_H], [W - 1 - PIL1 - 4, 0, BG_H], [W - 1 - PIL1 - 9, 120, 300]]) {
+    for (let y = 0; y < len; y += 6) { set(x, y0 + y, 20); set(x, y0 + y + 1, 20); set(x, y0 + y + 2, 20); set(x, y0 + y + 3, 20); set(x - 1, y0 + y + 1, 20); set(x + 1, y0 + y + 1, 20); set(x - 1, y0 + y + 2, 20); set(x + 1, y0 + y + 2, 20); set(x, y0 + y + 4, 20); set(x, y0 + y + 5, 20); }
+    if (len < BG_H) { set(x - 1, y0 + len, 20); set(x, y0 + len, 20); set(x + 1, y0 + len, 20); set(x + 1, y0 + len - 1, 20); }
+  }
+  const img = g.createImageData(W, BG_H), rgb = BGPAL.map(h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)));
+  for (let k = 0; k < buf.length; k++) { const [r, gg, b] = rgb[buf[k]]; img.data[k * 4] = r; img.data[k * 4 + 1] = gg; img.data[k * 4 + 2] = b; img.data[k * 4 + 3] = 255; }
+  g.putImageData(img, 0, 0);
+  return c;
+})();
+// 火焰 3 格（13×20），每格形狀不同；畫在杯口上方
+const FLAME_IMG = [0, 1, 2].map(f => {
+  const c = document.createElement('canvas'); c.width = 13; c.height = 20; const g = c.getContext('2d');
+  const sway = [0, -1.5, 1.5][f], hgt = [19, 16, 20][f];
+  for (let y = 0; y < 20; y++) for (let x = 0; x < 13; x++) {
+    const t = (19 - y) / hgt; if (t < 0 || t > 1) continue;                  // 0 = 底部，1 = 火尖
+    const w = 6.2 * Math.sin(Math.PI * Math.min(1, t * 1.15 + 0.08)) * (1 - t * 0.35), cx = 6 + sway * t * t;
+    const d = Math.abs(x - cx) / Math.max(0.5, w); if (d > 1) continue;
+    const heat = (1 - d) * (1.1 - t);                                         // 越中心、越底部越熱
+    const i = heat > 0.62 ? 3 : heat > 0.38 ? 2 : heat > 0.16 ? 1 : 0;
+    g.fillStyle = FLAME_C[i]; g.fillRect(x, y, 1, 1);
+  }
+  return c;
+});
+function drawBG() {
+  const off = bgOff % BG_H;
+  for (let y = -off; y < H; y += BG_H) blit(BG, 0, y);
+  const fi = Math.floor(clock * 8) % 3;
+  for (const [tx, ty] of TORCHES) for (const dy of [0, BG_H]) { const y = ty - off + dy; if (y > -20 && y < H + 20) blit(FLAME_IMG[(fi + tx) % 3], tx - 6, y - 19); }
+}
+
 const cv = document.getElementById('game'), ctx = cv.getContext('2d');
 let cssScale = 1;
 function resize() {
@@ -345,21 +2208,29 @@ function resize() {
 }
 // 對齊實體像素，像素圖才不會糊或忽粗忽細
 const snap = v => Math.round(v * cv.width / W) / (cv.width / W);
-function blit(img, x, y, k = 2) { ctx.drawImage(img, snap(x), snap(y), img.width * k, img.height * k); }   // k：1 美術像素 = k 遊戲像素
+function blit(img, x, y, k = 1) { ctx.drawImage(img, snap(x), snap(y), img.width * k, img.height * k); }   // k：1 美術像素 = k 遊戲像素
 const FONT = '"PingFang TC","Noto Sans TC","Noto Sans CJK TC","Microsoft JhengHei","Noto Serif CJK TC",sans-serif';
 const font = (px, b) => (b ? 'bold ' : '') + px + 'px ' + FONT;
 function text(s, x, y, px, color, align = 'center', bold = false) { ctx.font = font(px, bold); ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); }
 
 function drawPlat(p) {
-  if (p.type === 'spike') blit(IMG.spike, p.x, p.y - 4);   // 刺往上多畫 2 美術像素，判定不變
-  else blit(IMG.plat, p.x, p.y);
+  const n = pw(p) === PLAT_W2 ? 'D' : '';   // 一排 2 塊時用窄版的圖
+  if (p.type === 'spike') blit(IMG['spike' + n], p.x, p.y - 4);   // 刺往上多畫 4 px，判定不變
+  else if (p.type === 'spring') blit(IMG['spring' + n], p.x, p.y - 4);   // 彈簧板（判定跟一般平台一樣）
+  else if (p.type === 'fire') {   // 火焰平台：火苗 3 格動畫；剛點燃的 0.3 秒火苗由矮變高（3 格）
+    const img = IMG['fire' + n + (Math.floor(clock * 8 + p.id) % 3)], g = p.lit ? clock - p.lit : 9;
+    if (g < IGN_SPROUT) { const sh = 2 * (1 + Math.floor(g / (IGN_SPROUT / 3))); ctx.drawImage(img, 0, 6 - sh, img.width, 12 + sh, snap(p.x), snap(p.y - sh), img.width, 12 + sh); }
+    else blit(img, p.x, p.y - 6);
+  }
+  else { blit(IMG['plat' + n], p.x, p.y);
+    if (p.igniteAt && clock >= p.igniteAt) { ctx.fillStyle = 'rgba(255,250,235,0.9)'; ctx.fillRect(snap(p.x), snap(p.y), pw(p), PLAT_H); }   // 點燃瞬間閃白 0.1 秒
+  }
 }
 function drawPlayer() {
-  if (invuln > 0 && Math.floor(invuln * 20) % 2 === 0) return;   // 頂刺無敵時閃爍
-  const d = inputDir();
-  const img = hurtT > 0 ? IMG.hurt : !player.on ? IMG.fall
-    : d ? IMG[(Math.floor(clock * 8) % 2 ? 'walk2' : 'walk1') + (d < 0 ? 'L' : '')] : IMG.stand;
-  blit(img, player.x, player.y, 1);   // 女孩是 20×26 原尺寸
+  if (invuln > 0 && Math.floor(invuln * 20) % 2 === 0) return;   // 受傷後無敵時閃爍
+  const d = inputDir(), name = hurtT > 0 ? 'hurt' : !player.on ? 'fall' : d ? (Math.floor(clock * 8) % 2 ? 'walk2' : 'walk1') : 'stand';
+  const img = IMG[name + GIRL + (d < 0 && name.startsWith('walk') ? 'L' : '')];
+  blit(img, player.x + PW / 2 - img.width / 2, player.y + PH - img.height);   // 圖比碰撞框大：左右置中、腳底對齊
 }
 function drawArrows() {
   const d = mode === 'play' ? inputDir() : 0, y = H - 46;
@@ -367,16 +2238,14 @@ function drawArrows() {
     ctx.fillStyle = d === dir ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.16)';
     ctx.beginPath(); ctx.moveTo(cx + 22 * dir, y); ctx.lineTo(cx - 16 * dir, y - 24); ctx.lineTo(cx - 16 * dir, y + 24); ctx.closePath(); ctx.fill();
   }
-  ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(W / 2 - 0.5, HUD_H + SPIKE_H + 8, 1, H - HUD_H - SPIKE_H - 16);
 }
 function drawHUD() {
   ctx.fillStyle = '#11141b'; ctx.fillRect(0, 0, W, HUD_H);
   text('生命', 10, HUD_H / 2, 13, '#cfd6e4', 'left');
-  for (let i = 0; i < MAX_LIFE; i++) blit(i < life ? IMG.heart : IMG.heart0, 46 + i * 18, 16);   // 像素愛心 7×6 → 14×12
+  for (let i = 0; i < MAX_LIFE; i++) blit(i < life ? IMG.heart : IMG.heart0, 46 + i * 15, 17);   // 像素愛心 11×10
   text(floors + ' 層', W - 10, HUD_H / 2, 20, '#ffffff', 'right', true);
-  ctx.fillStyle = '#e8505b'; ctx.beginPath();   // 頂部尖刺
-  for (let x = 0; x < W; x += 12) { ctx.moveTo(x, HUD_H); ctx.lineTo(x + 6, HUD_H + SPIKE_H); ctx.lineTo(x + 12, HUD_H); }
-  ctx.fill();
+  ctx.fillStyle = PAL.M; ctx.fillRect(0, HUD_H - 2, W, 2);   // HUD 下緣
+  for (let x = 0; x < W; x += 12) blit(IMG.ceil, x, HUD_H);    // 頂部尖刺（像素圖 12×14 一格一格接）
 }
 function panel(lines) {
   ctx.fillStyle = 'rgba(8,10,16,0.78)'; ctx.fillRect(24, 170, W - 48, 300);
@@ -384,11 +2253,12 @@ function panel(lines) {
 }
 function draw() {
   ctx.imageSmoothingEnabled = false;   // 換畫布大小會重設，所以每格都設
-  ctx.fillStyle = '#1b1f2a'; ctx.fillRect(0, 0, W, H);
-  if (player) { for (const p of plats) drawPlat(p); drawPlayer(); }
+  ctx.fillStyle = BGPAL[0]; ctx.fillRect(0, 0, W, H);   // 先鋪底色，兩張背景接縫處才不會露出舊畫面
+  drawBG(); drawDragon();   // 火龍畫在石牆前面、平台後面（v13h：龍頭也一樣，平台永遠在龍前面）
+  if (player) { for (const p of plats) drawPlat(p); drawBreath(); drawBalls(); drawPlayer(); }
   drawArrows(); drawHUD();
   if (mode === 'title') panel([
-    ['阿斑下樓梯', 212, 30, '#ffd34d', true], ['Banban　v1.2', 244, 13, '#8b93a5'],
+    ['阿斑下樓梯', 212, 30, '#ffd34d', true], ['Banban　v1.3', 244, 13, '#8b93a5'],
     ['手機：按住左／右半邊移動', 290, 15, '#e6e9f0'], ['電腦：← → 方向鍵', 316, 15, '#e6e9f0'],
     ['點一下或按空白鍵開始', 370, 17, '#ffffff', true], [CREDIT, 440, 12, '#aab2c3']]);
   else if (mode === 'over') panel([
@@ -398,7 +2268,7 @@ function draw() {
 }
 
 // ---- 事件 ----
-let paused = false, acc = 0, lastTs = 0;
+let paused = false, acc = 0, lastTs = 0, noDraw = false;
 function loop(ts) {
   if (!paused) { acc += Math.min(0.1, Math.max(0, (ts - (lastTs || ts)) / 1000)); while (acc >= DT) { step(DT); acc -= DT; } }
   lastTs = ts; draw(); requestAnimationFrame(loop);
@@ -428,22 +2298,44 @@ resize(); requestAnimationFrame(loop);
 
 // ---- 測試介面（遊戲本身不會用到）----
 window.__stairs = {
+  COL_ANG,   // 火柱角度（弧度），測試用
   version: VERSION, credit: CREDIT,
-  C: { W, H, HUD_H, CEIL_Y, PW, PH, PLAT_W, PLAT_H, GAP, MAX_LIFE, START_LIFE, HEAL_STREAK, DMG, MOVE, GRAV, MAX_FALL, SCROLL0, SCROLL_STEP, CEIL_INVULN, CEIL_PUSH, DT, AIR, MIN_OV },
-  state: () => ({ mode, life, streak, floors, invuln, overReason, seed, games, scroll: scrollSpeed(), dir: inputDir(), ptrs: ptrs.size,
+  C: { W, H, HUD_H, CEIL_Y, PW, PH, PLAT_W, PLAT_H, GAP, MAX_LIFE, START_LIFE, HEAL_STREAK, DMG, MOVE, GRAV, MAX_FALL, SCROLL0, SCROLL_STEP, SCROLL_MAX, CEIL_INVULN: HURT_INVULN, HURT_INVULN, CEIL_PUSH, ROW2_P, ROW2_GAP, SPRING_EVERY, SPRING_V, PLAT_W2, DRAGON_EVERY, DRAGON_T, DRAGON_ROW2_P, PREP_A, PREP_B, DT, AIR, MIN_OV, P_FIRE: [1, 2, 3, 4, 5, 6, 7, 8].map(P_FIRE) },
+  state: () => ({ clock, mode, life, streak, floors, invuln, overReason, seed, games, scroll: scrollSpeed(), dir: inputDir(), ptrs: ptrs.size, lastLand: lastLand ? lastLand.id : null, dragon: dragon && { n: dragon.n, side: dragon.side, t: clock - dragon.t0, fireP: P_FIRE(dragon.n) }, dragonLog: dragonLog.slice(), fireP: dragon ? P_FIRE(dragon.n) : 0, evFires: dragon ? dragon.ev.fires.length : null,
     player: player && { x: player.x, y: player.y, vy: player.vy, on: player.on ? player.on.id : null, onType: player.on ? player.on.type : null },
-    plats: plats.map(p => ({ id: p.id, row: p.row, x: p.x, y: p.y, type: p.type, visited: p.visited })) }),
+    plats: plats.map(p => ({ id: p.id, row: p.row, x: p.x, w: pw(p), y: p.y, type: p.type, visited: p.visited, igniteAt: p.igniteAt || 0, lit: p.lit || 0, how: p.how || '' })) }),
   setSeed: s => { nextSeed = s >>> 0; },
+  sprites: () => IMG,
+  bg: () => BG,   // 截圖用：整張背景
+  dragonImgs: () => DIMG,
+  forceDragon: (n, side) => { startDragon(n, side); dragonDone = Math.max(dragonDone, n); },   // 截圖用：直接叫出火龍
+  dragonPose,
+  balls: () => balls.map(b => ({ id: b.p.id, go: b.go, at: b.at, pos: ballPos(b), from: b.from })),
+  ballPos: (id, at) => { const b = balls.find(q => q.p.id === id); return b ? ballPos(b, at) : null; },
+  inColumn,
+  mouthAt: () => { if (!dragon) return null; const { f, fire } = dragonPose(clock - dragon.t0); return { f, xy: dragonMouth(f), dir: dragon.side > 0 ? -1 : 1, mouth: DMOUTH, drawn: dragon.drawnO || null, colL: fire >= 0 ? COL_L[Math.min(4, Math.floor(fire / 0.05))] : 0 }; },
+  dragonFrame: (f, r) => DIMG[f][r ? 1 : 0].toDataURL(),   // 截圖用：火龍某格原圖
+  dragonDebug: () => { if (!dragon) return null; const { f, dx, fire, wind } = dragonPose(clock - dragon.t0), R = dragon.side > 0, img = DIMG[f][R ? 1 : 0];
+    return { img, x: R ? W - img.width - dx : dx, y: dragonY(), headY: dragonY() + DEYE[3][1], eyeY: dragonY() + DEYE[f][1], f, breath: fire >= 0 || wind >= 0, bgOff }; },
   start: s => newGame(s),
+  // 測試用：從第 r0 排開始一局（前面的排照常產生、只是不放到場上），看第 100n 層前後真正的排法
+  startAt: (s, r0) => { newGame(s); gen = makeGen(seed); frng = fireRngOf(seed); for (let i = 0; i < r0; i++) nextRow(gen);
+    const q = gen.rows[r0][0]; rowN = r0; lastY = 240; plats = [{ x: q.x, w: pw(q), y: lastY, py: lastY, type: q.type, id: 0, row: r0, visited: true, src: q }]; fill();
+    player = { x: q.x + pw(q) / 2 - PW / 2, y: lastY - PH, vy: 0, on: plats[0], ignore: null }; floors = r0; dragonDone = Math.floor(r0 / DRAGON_EVERY); },
   pause: b => { paused = !!b; acc = 0; },
-  step: (n = 1) => { for (let i = 0; i < n; i++) step(DT); draw(); },
-  genRows,
+  step: (n = 1) => { for (let i = 0; i < n; i++) step(DT); if (!noDraw) draw(); },
+  noDraw: b => { noDraw = !!b; },   // 測試快轉時不重畫（v1.3 背景和圖變大後，每步都重畫是測試變慢的主因）
+  genRows, simRows, makeGen, nextRow, chooseFire, BREATHS,
   reachable,
+  // 機器人用：從場上第 id 塊平台出發的路線（跟生成器同一套規則）
+  plan: id => { const X = plats.find(p => p.id === id); if (!X) return null; const rowAt = j => { const r = plats.filter(p => p.row === j); return r.length ? r : null; }; const pl = exitPlan(rowAt, X, X.row); if (pl) pl.landY = Math.min(...rowAt(pl.j).map(p => p.y)); return pl; },
   // 測試用：擺一個指定場景。plats: [{x,y,type}]，玩家放在 (px,py)
   setup: ({ plats: ps, px, py, life: l, floors: f }) => {
-    newGame(1); plats = ps.map((p, i) => ({ x: p.x, y: p.y, py: p.y, type: p.type, id: 1000 + i, row: p.row !== undefined ? p.row : (f || 0) + 1 + i, visited: false }));
+    newGame(1); lastLand = null; plats = ps.map((p, i) => ({ x: p.x, w: p.w || PLAT_W, y: p.y, py: p.y, type: p.type, id: 1000 + i, row: p.row !== undefined ? p.row : (f || 0) + 1 + i, visited: false }));
+    const sr = {}; for (const p of plats) { p.src = { x: p.x, w: p.w, type: p.type }; (sr[p.row] = sr[p.row] || []).push(p.src); }
+    for (const r in sr) gen.rows[r] = sr[r].sort((a, b) => a.x - b.x);   // 場景的排也放進生成器（吐火挑平台、檢查有沒有路要用）
     lastY = 1e9; player = { x: px, y: py, vy: 0, on: null, ignore: null };
-    if (l !== undefined) life = l; if (f !== undefined) floors = f;
+    if (l !== undefined) life = l; if (f !== undefined) { floors = f; dragonDone = Math.floor(f / DRAGON_EVERY); }
   },
 };
 })();
