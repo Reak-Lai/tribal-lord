@@ -1,7 +1,7 @@
-// 阿斑下樓梯 Banban v1.5.1（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
+// 阿斑下樓梯 Banban v1.6（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
 (() => {
 'use strict';
-const VERSION = '阿斑下樓梯 v1.5.1';
+const VERSION = '阿斑下樓梯 v1.6';
 const CREDIT = '同人作品｜原作 NS-SHAFT／NAGI-P SOFT';
 
 // ---- 數值（邏輯座標：畫面 360×640，整張畫布等比縮放）----
@@ -26,8 +26,9 @@ const DRAGON_EVERY = 50;   // v1.5.1 定案（Yi Way 11/15 02:13）：每 50 層
 const DRAGON_ROW2_P = 1.0;   // 開發自訂（待企劃確認）：火龍期間每排都先試著排 2 塊，不然「同排要留 1 塊不扣血」會讓火焰平台幾乎不出現
 // v1.5.1（Yi Way 11/15 01:33、02:13）：取消 P_FIRE。每次事件先抽目標 K = 1–10 塊（02:56 改，原 3–10）（整數均勻，不隨層數、次數變），三口火平分（第 i 口累計到 ⌈K(i+1)/3⌉）；
 // 點不到 K 塊（畫面上沒有可點的、會變死路、來不及）就點到最多、記下不足。保底：至少 FIRE_MIN 塊
-const FIRE_MIN = 1, FIRE_MAX = 10;   // v1.5.1 決定 1（Yi Way 02:56）：1–10 塊、保底至少 1 塊（02:13 版是 3–10、保底 3）
-const fireTarget = rng => FIRE_MIN + Math.floor(rng() * (FIRE_MAX - FIRE_MIN + 1)), breathGoal = (K, i) => Math.ceil(K * (i + 1) / 3);
+// v1.6（規格第 2 項）：一口火，目標 K = 8–15 的整數（均勻），保底 FIRE_MIN = 1 塊；湊不滿 K 就點到幾塊算幾塊
+const FIRE_MIN = 1, FIRE_KMIN = 8, FIRE_MAX = 15;   // v1.5.1 是 K = 1–10、三口火   // v1.5.1 決定 1（Yi Way 02:56）：1–10 塊、保底至少 1 塊（02:13 版是 3–10、保底 3）
+const fireTarget = rng => FIRE_KMIN + Math.floor(rng() * (FIRE_MAX - FIRE_KMIN + 1));
 const SPRING_SQ = 0.06, SPRING_ST = 0.20;   // v1.5 第 1 項：彈簧壓縮、伸展各顯示幾秒（只影響畫面）
 const SPRING_EVERY = 8, SPRING_V = 360; // v1.3：每 8 排 1 塊彈簧；踩到往上彈的初速 px/s（GRAV 1100 → 約彈 59 px）
 const DT = 1 / 120;
@@ -162,8 +163,8 @@ const shortWhy = sc => !sc || !sc.rows ? 'none' : sc.dead && !sc.late ? 'dead' :
 // v1.5 吐火時間（秒，從事件開始算；tIn = 登場用掉的時間）：第 i 口在第 31 格真正噴出（fireStart），提前 0.25 秒挑平台（pickTime）；
 // 第三口沒火就保底，之後每 0.1 秒再保底到第三口吐火格結束（forceUntil）
 const breathStart = (tIn, i) => tIn + D_OUT + i * DBR, fireStart = (tIn, i) => breathStart(tIn, i) + D_FIRE0 / DFPS_B, fireEnd = (tIn, i) => breathStart(tIn, i) + (D_FIRE1 + 1) / DFPS_B;
-const pickTime = (tIn, i) => fireStart(tIn, i) - PICK_LEAD, forceUntil = tIn => fireEnd(tIn, 2);
-const dragonTimes = tIn => ({ tIn, pick: [0, 1, 2].map(i => pickTime(tIn, i)), fire: [0, 1, 2].map(i => [fireStart(tIn, i), fireEnd(tIn, i)]), forceUntil: forceUntil(tIn), len: tIn + DRAGON_T });
+const pickTime = (tIn, i) => fireStart(tIn, i) - PICK_LEAD, forceUntil = tIn => fireEnd(tIn, 0);   // v1.6：只有一口（第 0 口）
+const dragonTimes = tIn => ({ tIn, pick: [pickTime(tIn, 0)], fire: [[fireStart(tIn, 0), fireEnd(tIn, 0)]], forceUntil: forceUntil(tIn), end: tIn + DRAGON_T, len: tIn + DRAGON_T + D_EXIT });   // end = 吐火事件結束（飛回停棲）；len = 再加退場 3 秒（待機 1.5 + 飛出 1.5）
 const fireRngOf = s => mulberry32((s ^ 0x5bd1e995) >>> 0);  // 挑火焰用的亂數另外一串，不影響平台排法
 // 模擬（測試用）：每 every 排一次火龍；玩家在第 R0 = every×n 排落地觸發，假設她一直站在那塊。
 // 她那塊在畫面上的高度依種子隨機（ypl）。第 j 排在 t 秒時的高度 = ypl + (j - R0)×80 − 捲動×t。
@@ -172,21 +173,24 @@ const fireRngOf = s => mulberry32((s ^ 0x5bd1e995) >>> 0);  // 挑火焰用的�
 function simRows(seed, N, o = {}) {
   const every = o.every || DRAGON_EVERY, g = makeGen(seed, o.prepEvery || every, o.prepB !== undefined ? o.prepB : PREP_B), rng = fireRngOf(seed), hr = mulberry32(seed * 7 + 3), events = [];
   const ensure = j => { while (g.out < j) nextRow(g); };
-  let lastSide = 0;   // 上一次事件火龍停在哪一邊：同一邊就不用再登場（tIn = 0），換邊或第一次要先登場
   for (let n = 1; n * every + 30 <= N; n++) {
-    const side = (seed + n) & 1 ? 1 : -1, tIn = side === lastSide ? 0 : D_TIN; lastSide = side;
+    const side = (seed + n) & 1 ? 1 : -1, tIn = D_TIN;   // v1.6：每次都退場飛走，下一次一定從畫面外登場
     const R0 = n * every, K = o.pf !== undefined ? o.pf : fireTarget(rng), sp = Math.min(SCROLL_MAX, SCROLL0 * (1 + SCROLL_STEP * Math.floor(R0 / 10)));
     const ypl = CEIL_Y + 40 + hr() * (H - 180 - CEIL_Y), ev = { fires: [] };
     let tries = 0, retried = false;
-    const at = (t, want, force = false) => {
+    // v1.6：下方組 = 第 R0 排以下（台階頂面在她腳底以下）；上方組 = 畫面內其他排（含她那排），只在下方湊不出保底 1 塊時才挑 1 塊
+    const at = (t, want, force = false, late = false) => {
       const top = ypl - sp * t; ensure(R0 + Math.ceil((H + 2 * GAP - top) / GAP));
       const vis = []; for (let j = Math.max(1, R0 - 12); ; j++) { const y = top + (j - R0) * GAP; if (y >= H - PLAT_H) break; if (y > CEIL_Y + 10) vis.push(j); }
-      tries++; if (want > 0) chooseFire(g, rng, vis, want, ev, () => false);
-      if (force && ev.fires.length < FIRE_MIN) chooseFire(g, rng, vis, FIRE_MIN - ev.fires.length, ev, () => false, true);   // 保底找不到：放寬同排安全
+      const below = vis.filter(j => j > R0), above = vis.filter(j => j <= R0), tag = grp => q => { q.grp = grp; };
+      tries++; if (want > 0) chooseFire(g, rng, below, want, ev, () => false).forEach(tag('below'));
+      if (force && ev.fires.length < FIRE_MIN) chooseFire(g, rng, below, FIRE_MIN - ev.fires.length, ev, () => false, true).forEach(tag('below'));   // 保底找不到：放寬同排安全
+      if (late && ev.fires.length < FIRE_MIN) chooseFire(g, rng, above, 1, ev, () => false, true).forEach(tag('above'));   // 下方連 1 塊都沒有：上方最多 1 塊
     };
-    [0, 1, 2].forEach(i => at(pickTime(tIn, i), breathGoal(K, i) - ev.fires.length, i === 2));
-    for (let t = pickTime(tIn, 2) + 0.1; t < tIn + DRAGON_T && ev.fires.length < K; t += 0.1) { retried = true; at(t, K - ev.fires.length, true); }
-    events.push({ n, tIn, K, fires: ev.fires.length, short: Math.max(0, K - ev.fires.length), why: ev.fires.length < K ? shortWhy(ev.scan) : '', fb: ev.fb || 0, retried, firesRows: ev.fires.map(q => g.rows.findIndex(r => r && r.includes(q))) });
+    at(pickTime(tIn, 0), K, true);
+    for (let t = pickTime(tIn, 0) + 0.1; t < forceUntil(tIn) && ev.fires.length < K; t += 0.1) { retried = true; at(t, K - ev.fires.length, true); }
+    for (let t = forceUntil(tIn); t < tIn + DRAGON_T && ev.fires.length < FIRE_MIN; t += 0.1) { retried = true; at(t, 0, true, true); }
+    events.push({ n, tIn, K, fires: ev.fires.length, short: Math.max(0, K - ev.fires.length), why: ev.fires.length < K ? shortWhy(ev.scan) : '', fb: ev.fb || 0, retried, grp: ev.fires.map(q => q.grp), firesRows: ev.fires.map(q => g.rows.findIndex(r => r && r.includes(q))) });
   }
   ensure(N);
   return { rows: g.rows.slice(0, N + 1), mains: g.mains.slice(0, N + 1), events, fallbacks: g.fallbacks, row2Miss: g.row2Miss || 0, paused: g.paused || 0 };
@@ -212,14 +216,19 @@ function clearInput() { keys.ArrowLeft = keys.ArrowRight = 0; ptrs.clear(); }
 // ---- 遊戲狀態 ----
 let mode = 'title', plats = [], player = null, life = START_LIFE, floors = 0, invuln = 0, lastY = 0, nextId = 0;
 let balls = [];   // 飛向平台的小火球（火柱碰不到的平台用）
-let hurtT = 0, healDue = false, noHealOn = null, healedOn = new Set(), bgOff = 0, rowN = 0, lastLand = null, dragon = null, perch = null, dragonDone = 0, dragonLog = [], evLog = [];   // perch：事件結束後停在牆上待機的火龍（哪一邊、從什麼時候）   // bgOff：背景石牆捲了多遠   // healDue：受傷後待回血；noHealOn：受傷當下站著的那塊（不算）；healedOn：這次受傷後已經回過血的平台（同一塊不重複回）   // 只影響畫面：受傷動作顯示的剩餘秒數
+let hurtT = 0, healDue = false, noHealOn = null, healedOn = new Set(), bgOff = 0, rowN = 0, lastLand = null, dragon = null, leaving = null, dragonDone = 0, dragonLog = [], evLog = [], mileDone = 0, banner = null, best = 0, newRec = false, bestBefore = 0;   // leaving：v1.6 吐完火後的退場（哪一邊、從什麼時候；待機 1.5 秒 → 飛出畫面 1.5 秒）   // mileDone／banner：v1.6 每 100 層祝賀   // best：v1.6 最高紀錄（localStorage）   // bgOff：背景石牆捲了多遠   // healDue：受傷後待回血；noHealOn：受傷當下站著的那塊（不算）；healedOn：這次受傷後已經回過血的平台（同一塊不重複回）   // 只影響畫面：受傷動作顯示的剩餘秒數
 let gen = null, frng = null, seed = 0, nextSeed = null, overReason = '', overAt = 0, clock = 0, games = 0;
+// v1.6 最高紀錄：localStorage 存最高樓層；讀不到、寫不進去（被禁用、無痕模式滿了）都當作 0，遊戲照常
+const BEST_KEY = 'banban-stairs-best';
+function loadBest() { try { const v = parseInt(window.localStorage.getItem(BEST_KEY), 10); return v > 0 ? v : 0; } catch (e) { return 0; } }
+best = loadBest();
+function saveBest(v) { try { window.localStorage.setItem(BEST_KEY, String(v)); } catch (e) { /* 存不進去：這一頁還是記得 */ } }
 const scrollSpeed = () => Math.min(SCROLL_MAX, SCROLL0 * (1 + SCROLL_STEP * Math.floor(floors / 10)));
 
 function fill() { while (lastY < H + GAP * 2) { const r = nextRow(gen); lastY += GAP; rowN++; for (const q of r) plats.push({ x: q.x, w: pw(q), y: lastY, py: lastY, type: q.type, id: ++nextId, row: rowN, visited: false, src: q }); } }   // src：生成器裡同一塊（點火時一起改，之後的排才會照著留路）   // 每排 1～2 塊，row = 從起點往下第幾排
 function newGame(s) {
   seed = s !== undefined ? s >>> 0 : nextSeed !== null ? nextSeed : (Math.random() * 2 ** 32) >>> 0; nextSeed = null;
-  gen = makeGen(seed); frng = fireRngOf(seed); nextId = 0; rowN = 0; lastLand = null; dragon = null; perch = null; dragonDone = 0; dragonLog = []; evLog = []; balls = []; lastY = 240;
+  gen = makeGen(seed); frng = fireRngOf(seed); nextId = 0; rowN = 0; lastLand = null; dragon = null; leaving = null; dragonDone = 0; dragonLog = []; evLog = []; balls = []; lastY = 240; mileDone = 0; banner = null; newRec = false;
   plats = [{ x: gen.prev.x, w: PLAT_W, y: lastY, py: lastY, type: 'normal', id: 0, row: 0, visited: true }];
   fill();
   player = { x: W / 2 - PW / 2, y: lastY - GAP * 0 - PH, vy: 0, on: plats[0], ignore: null };
@@ -230,7 +239,7 @@ function newGame(s) {
 function hurt(n) { life = Math.max(0, life - n); hurtT = 0.4; healDue = true; noHealOn = player.on || lastLand; healedOn = new Set(); }   // 受傷：記下待回血；當下那塊（站著的，或彈簧彈起來還在空中時剛彈的那塊）不算
 function land(p) {
   player.on = p; player.vy = 0; player.y = p.y - PH;
-  p.visited = true; floors = Math.max(floors, p.row); lastLand = p; checkDragon();   // 層數 = 實際往下到第幾排，跳過的也算；往回不減
+  p.visited = true; floors = Math.max(floors, p.row); lastLand = p; checkDragon(); checkMile();   // 層數 = 實際往下到第幾排，跳過的也算；往回不減
   if (hurts(p)) spikeHit();   // 釘板、火焰平台
   else if (healDue && (p.type === 'spring' ? invuln <= 0 : (p !== noHealOn && !healedOn.has(p)))) { healedOn.add(p); life = Math.min(MAX_LIFE, life + HEAL); if (life >= MAX_LIFE) healDue = false; }   // 安全階梯（含彈簧、還沒點燃的平台）+1，補滿為止。v1.5.1（Yi Way 11/15 01:08）：彈簧例外，每次落上去都算（同一個彈簧連彈也算）。v1.5.1 定案（02:13）：閃爍（無敵）中落在彈簧上不回血
   if (p.type === 'spring') { player.on = null; player.vy = -SPRING_V; p.springT = clock; }   // 彈起來；落回同一塊會再彈
@@ -241,20 +250,25 @@ function checkDragon() {
   const n = Math.floor(floors / DRAGON_EVERY);
   if (n > dragonDone) { dragonDone = n; startDragon(n, (seed + n) & 1 ? 1 : -1); dragonLog.push(n); }   // 左右用種子決定，不動到平台亂數
 }
-function startDragon(n, side) { const tIn = perch && perch.side === side ? 0 : D_TIN; perch = null; dragon = { n, t0: clock, side, tIn, nb: 0, lastTry: 0, ev: { fires: [], K: fireTarget(frng), n } }; }   // 已經停在這一邊就直接飛出；換邊時舊的那隻直接不見、新的從畫面上方登場（開發自訂，待企劃確認）
-// 吐火時點火：每口火噴出前 0.25 秒從畫面上的平台挑（chooseFire），第 i 口挑到累計 ⌈K(i+1)/3⌉ 塊；
-// 第三口之後每 0.1 秒補挑到 K（不到 3 塊時用最快的火球），直到第三口吐火格結束；之後到事件結束，她一落地就補吐火球（每 0.1 秒一顆）補到 K
+// v1.6 每 100 層祝賀：樓層第一次到（或跳過）100、200… 時在 HUD 那一行顯示金黃色「N 層！」，約 2 秒後淡出；每個里程碑只一次，不暫停
+const MILE_EVERY = 100, MILE_HOLD = 2.0, MILE_FADE = 0.5, MILE_C = '#ffd34d';   // 金黃色 = 標題「阿斑下樓梯」同一個色
+let hudL = null;   // 測試用：HUD 上各區塊的 x 範圍
+function checkMile() { const m = Math.floor(floors / MILE_EVERY); if (m > mileDone) { mileDone = m; banner = { n: m * MILE_EVERY, t0: clock }; } }
+function startDragon(n, side) { leaving = null; dragon = { n, t0: clock, side, tIn: D_TIN, nb: 0, lastTry: 0, ev: { fires: [], K: fireTarget(frng), n } }; }   // v1.6：上一次已經飛走，每次都從畫面外登場   // 已經停在這一邊就直接飛出；換邊時舊的那隻直接不見、新的從畫面上方登場（開發自訂，待企劃確認）
+// v1.6 只噴一口：噴出前 0.25 秒從她下方的平台挑 K 塊（pickFire）；挑不滿就每 0.1 秒補挑到 K，直到這一口吐火格結束（不到 1 塊時用最快的火球、再不行放寬同排安全）；
+// 之後到飛回停棲為止，還沒有 1 塊的話她一落地就補吐火球保底（lateFire：下方 → 下方放寬 → 上方最多 1 塊）。退場（待機＋飛出）不點火
 function dragonFire() {
   const t = clock - dragon.t0, tIn = dragon.tIn, ev = dragon.ev, have = ev.fires.length;
-  const guard = () => { if (ev.fires.length < FIRE_MIN) pickFire(2, FIRE_MIN - ev.fires.length, true, true); };   // v1.5.1（企劃 03:40）：保底那 1 塊照一般規則找不到 → 放寬同排安全再找一次
-  if (dragon.nb < 3 && t >= pickTime(tIn, dragon.nb)) { const i = dragon.nb++; if (!noPickTest) { pickFire(i, breathGoal(ev.K, i) - have, i === 2 && have < FIRE_MIN); if (i === 2) guard(); } }
-  else if (dragon.nb >= 3 && t < forceUntil(tIn) && have < ev.K && t - dragon.lastTry >= 0.1) { dragon.lastTry = t; if (!noPickTest) { pickFire(2, ev.K - have, have < FIRE_MIN); guard(); } }
-  else if (dragon.nb >= 3 && t >= forceUntil(tIn) && have < ev.K && player.on && t - dragon.lastTry >= 0.1) { dragon.lastTry = t; lateFire(); }   // v1.5c 保底延長（企劃 14:13）；v1.5.1 補到 K
+  const guard = () => { if (ev.fires.length < FIRE_MIN) pickFire(0, FIRE_MIN - ev.fires.length, true); if (ev.fires.length < FIRE_MIN) pickFire(0, FIRE_MIN - ev.fires.length, true, true); };   // v1.5.1（企劃 03:40）保底：最快火球 → 放寬同排安全
+  if (!dragon.nb && t >= pickTime(tIn, 0)) { dragon.nb = 1; if (!noPickTest) { pickFire(0, ev.K, false); guard(); } }
+  else if (dragon.nb && t < forceUntil(tIn) && have < ev.K && t - dragon.lastTry >= 0.1) { dragon.lastTry = t; if (!noPickTest) { pickFire(0, ev.K - have, have < FIRE_MIN); guard(); } }
+  else if (dragon.nb && t >= forceUntil(tIn) && have < FIRE_MIN && player.on && t - dragon.lastTry >= 0.1) { dragon.lastTry = t; lateFire(); }   // v1.5c 保底延長；v1.6 只補保底 1 塊（一口火負責其他）
 }
 function endDragon() {   // 事件結束：記下這次的 K、挑了幾塊、不足和原因（測試、量測用）
   const ev = dragon.ev, got = ev.fires.length;
-  evLog.push({ n: dragon.n, K: ev.K, got, short: Math.max(0, ev.K - got), why: got < ev.K ? (ev.lateWhy || shortWhy(ev.scan)) : '', fb: ev.fb || 0, scans: (ev.scans || []).length, scan0: ev.scans && ev.scans[0] });
-  perch = { side: dragon.side, t0: clock }; dragon = null;
+  const grp = ev.fires.map(q => q.grp);
+  evLog.push({ n: dragon.n, K: ev.K, got, short: Math.max(0, ev.K - got), why: got < ev.K ? (ev.lateWhy || shortWhy(ev.scan)) : '', fb: ev.fb || 0, scans: (ev.scans || []).length, scan0: ev.scans && ev.scans[0], breaths: dragon.nb, grp, above: grp.filter(g => g === 'above').length, belowCand: !!ev.belowCand, aboveAt: ev.aboveAt || null });
+  leaving = { side: dragon.side, t0: dragon.t0 + dragon.tIn + DRAGON_T }; dragon = null;   // v1.6 退場：牆上待機 1.5 秒 → 飛出畫面 1.5 秒（只是動畫）
 }
 // 補吐火球：從畫面內、不是她腳下的一般平台挑一塊。先挑她下面、跟平常一樣「來得及在她落上去前點燃」而且不造成死路、同一排還有另一塊一般平台的；
 // 沒有的話挑她腳底高度以上的（她已經過了、不可能再落上去，也不影響往下的路）。火球從火龍現在的嘴（吐火格的嘴角，飛行格的鼻尖）吐出
@@ -264,14 +278,16 @@ function lateFire() {
   const feet = player.y + PH, onScreen = p => p.src && p.type === 'normal' && !p.igniteAt && p !== player.on && p.y > CEIL_Y + 10 && p.y < H - PLAT_H && p.y - sp * (ft(p) + IGN_FLASH) > CEIL_Y;   // v1.5.1：點燃時還在畫面內（沒捲到頂刺後面）
   const below = plats.filter(p => onScreen(p) && p.y > feet + 2 && clock + ft(p) + IGN_FLASH <= clock + reachTime(p) - 0.05 && gen.rows[p.row] && gen.rows[p.row].length === 2 && gen.rows[p.row].every(q => q === p.src || q.type === 'normal'));
   const good = below.filter(p => { p.src.type = 'fire'; const ok = rowsGood(gen, p.row); p.src.type = 'normal'; return ok; });
-  const above = plats.filter(p => onScreen(p) && p.y <= feet + 2);
-  let pool = good.length ? good : above, fb = false;
+  const above = plats.filter(p => onScreen(p) && p.y <= feet + 2).filter(p => { p.src.type = 'fire'; const ok = rowsGood(gen, p.row); p.src.type = 'normal'; return ok; });   // v1.6：上方組也要過死路檢查
+  let pool = good, fb = false, grp = 'below';
   if (!pool.length && dragon.ev.fires.length < FIRE_MIN) {   // v1.5.1（企劃 03:40）保底放寬：她下面、來得及、不管同排安全，但要通過死路檢查
     pool = plats.filter(p => onScreen(p) && p.y > feet + 2 && clock + ft(p) + IGN_FLASH <= clock + reachTime(p) - 0.05 && gen.rows[p.row] && gen.rows[p.row].includes(p.src))
       .filter(p => { p.src.type = 'fire'; const ok = rowsGood(gen, p.row); p.src.type = 'normal'; return ok; }); fb = pool.length > 0; }
+  if (pool.length) dragon.ev.belowCand = true;
+  if (!pool.length && dragon.ev.fires.length < FIRE_MIN) { pool = above; grp = 'above'; if (pool.length) dragon.ev.aboveAt = { fires: dragon.ev.fires.length, below: below.length, good: good.length, t: +(clock - dragon.t0).toFixed(3) }; }   // 測試用：挑上方那一刻下方可點的有幾塊（一定是 0）   // v1.6：下方連保底 1 塊都沒有 → 上方挑 1 塊（lateFire 只在 0 塊時叫，所以最多 1 塊）
   if (!pool.length) { dragon.ev.lateWhy = below.length ? 'dead' : 'none'; return; }
   const p = pool[Math.floor(frng() * pool.length)], at = clock + ft(p);
-  p.src.type = 'fire'; dragon.ev.fires.push(p.src); p.ev = dragon.ev; p.how = 'ball'; p.late = true; p.igniteAt = at; if (fb) { dragon.ev.fb = (dragon.ev.fb || 0) + 1; p.src.fb = true; p.fb = true; }
+  p.src.type = 'fire'; p.src.grp = grp; dragon.ev.fires.push(p.src); p.ev = dragon.ev; p.how = 'ball'; p.late = true; p.igniteAt = at; if (fb) { dragon.ev.fb = (dragon.ev.fb || 0) + 1; p.src.fb = true; p.fb = true; }
   balls.push({ p, go: clock, at, from, dir: dragon.side > 0 ? -1 : 1, late: true });
 }
 const IGN_FLASH = 0.1, IGN_SPROUT = 0.3;   // 點燃動畫：閃白 0.1 秒 → 冒火苗 3 格（0.3 秒）→ 持續燃燒。閃完才算火焰（開始扣血）
@@ -299,7 +315,7 @@ function reachTime(p) {
 function pickFire(bi, want, force, relax = false) {   // bi = 第幾口（0–2；補挑算第三口）；want = 這次最多挑幾塊；force = 不到 3 塊的保底（火球用最快的 0.3 秒）
   if (want <= 0) return;
   const cur = player.on ? player.on.row : lastLand ? lastLand.row : 0, feet = player.y + PH;
-  const vis = [...new Set(plats.filter(p => p.y > CEIL_Y + 10 && p.y < H - PLAT_H && p.src).map(p => p.row))].sort((a, b) => a - b);   // v1.5.1 定案：畫面內所有排（含她腳底以上、旁邊）
+  const vis = [...new Set(plats.filter(p => p.y > CEIL_Y + 10 && p.y < H - PLAT_H && p.src && p.y > feet + 2).map(p => p.row))].sort((a, b) => a - b);   // v1.6（規格第 3 項）：只挑下方組（台階頂面在她腳底以下）；上方組只在 lateFire 保底
   const byQ = q => plats.find(p => p.src === q), R = dragon.side > 0, dir = R ? -1 : 1, sp = scrollSpeed();
   const fs = dragon.t0 + fireStart(dragon.tIn, bi);   // 這一口真正噴出（第 31 格）的時間
   const plan = q => {   // 這塊怎麼點、什麼時候點
@@ -318,12 +334,12 @@ function pickFire(bi, want, force, relax = false) {   // bi = 第幾口（0–2�
     return (!noWait && ig > clock + reachTime(p) - 0.05) || p.y - sp * (ig - clock) <= CEIL_Y; };   // v1.5.1：她腳底以上（她站著或正往下掉）、站著時同一排旁邊那塊不用等（她落不上去）；其他照舊要比她最快落上去早 0.05 秒；都要在點燃時還在畫面內   // v1.5（企劃核准）：火球一顆接一顆吐（第 n 顆晚 0.04×n 秒），這顆前面已經挑了幾顆火球就把延遲算進去   // 點燃（閃白結束）要比她最快落上去早 0.05 秒以上
   let n = 0;
   for (const q of chooseFire(gen, frng, vis, want, dragon.ev, excl, relax)) {
-    const p = byQ(q), pl = plan(q); p.ev = dragon.ev; p.how = pl.how;
+    const p = byQ(q), pl = plan(q); p.ev = dragon.ev; p.how = pl.how; q.grp = 'below'; dragon.ev.belowCand = true;
     if (pl.how === 'col') p.igniteAt = pl.at;
     else { p.igniteAt = pl.at + 0.04 * n; balls.push({ p, go: pl.go + 0.04 * n, at: pl.at + 0.04 * n, from: pl.from, dir }); n++; }   // 好幾顆時一顆接一顆吐
   }
 }
-function gameOver(why) { mode = 'over'; overReason = why; overAt = clock; }
+function gameOver(why) { mode = 'over'; overReason = why; overAt = clock; bestBefore = best; newRec = floors > best; if (newRec) { best = floors; saveBest(best); } }   // v1.6：破紀錄就存
 
 function step(dt) {
   clock += dt;
@@ -332,7 +348,8 @@ function step(dt) {
   for (const p of plats) { p.py = p.y; p.y -= sp * dt; }
   lastY -= sp * dt;
   while (plats.length && plats[0].y + PLAT_H < 0) plats.shift();
-  if (dragon && clock - dragon.t0 >= dragon.tIn + DRAGON_T) endDragon();   // 事件結束：火龍留在牆上待機
+  if (dragon && clock - dragon.t0 >= dragon.tIn + DRAGON_T) endDragon();   // 吐火事件結束（飛回停棲）→ 退場
+  if (leaving && clock - leaving.t0 >= D_EXIT) leaving = null;   // 飛出畫面了
   fill();
   if (dragon) dragonFire();
   balls = balls.filter(b => clock < b.at && b.p.igniteAt && plats.includes(b.p));   // 火球落地（或平台捲出畫面）就消失
@@ -837,24 +854,35 @@ const DFW = DANIM.fw, DFH = DANIM.fh, DFPS_B = DANIM.seg.breath.fps, DBR = DANIM
 const D_FIRE0 = DANIM.phases.fire[0], D_FIRE1 = DANIM.phases.fire[1];   // 吐火格 31–46（json 的 fire 區間）
 const D_IN = 3.0, D_IN_IDLE = 1.5, D_TIN = D_IN + D_IN_IDLE;   // 登場：拍翅 ×2（3.0 秒，json fly_in）落到停棲，接待機第 0 格播 1 圈（開發自訂，待企劃確認）
 const D_OUT = 1.5, D_BACK = 1.5;   // 飛出、飛回各拍翅 ×1（1.5 秒，json fly_out／return）
-const DRAGON_T = D_OUT + 3 * DBR + D_BACK;   // 事件本身 ≈ 9.5 秒（飛出 1.5 + 吐火三口 6.5 + 飛回 1.5）；前面要登場時再加 D_TIN
+const DRAGON_T = D_OUT + DBR + D_BACK;   // v1.6 吐火事件 ≈ 5.17 秒（飛出 1.5 + 吐火一口 2.17 + 飛回 1.5）；前面登場 D_TIN
+const D_STAY = 1.5, D_TURN = 0.2, D_FLY = 1.3, D_EXIT = D_STAY + D_TURN + D_FLY;   // v1.6c（Yi Way 11/21 00:35）：待機 1.5 → 轉身 0.2（寬度縮到 0、鏡射、再拉回）→ 飛出 1.3，總長 3 秒   // v1.6 退場（規格第 5 項）：牆上待機 1.5 秒（待機 18 格剛好 1 圈）→ 拍翅飛出畫面 1.5 秒（拍翅 18 格剛好 1 圈）
 const PICK_LEAD = 0.25;   // 每口火在真正噴出（第 31 格）前 0.25 秒挑平台（跟 v1.3 蓄力 0.25 秒後火柱才出來同一個提前量）
-const DPOS = { start: DANIM.pos.start.map(Math.floor), perch: DANIM.pos.perch.map(Math.floor), fire: DANIM.pos.fire.map(Math.floor) };   // json 的預覽座標（-14.5 這種半格取整，圖才對齊像素）
+const DPOS = { start: [-152, -230], away: [-176, -319], perch: DANIM.pos.perch.map(Math.floor), fire: DANIM.pos.fire.map(Math.floor) };   // v1.6：畫面外的點沿 json 的登場線（start → perch）往外推到整隻龍躲在 HUD 後面（拍翅格不透明範圍 y 6–270：−230 + 270 = 40 < HUD 44），入場從這裡出發；退場沿同一條線再往外 1.25 倍到 away（ease-in 最後幾格很快，提早整隻躲進 HUD，不會突然消失）   // json 的預覽座標（-14.5 這種半格取整，圖才對齊像素）
 
 // 火焰分色帶（火柱、蓄力、火星、火焰平台共用）：黃白 → 黃 → 橘 → 橘紅 → 暗紅；煙：深灰
 const FIRE_C = ['#fff4b0', '#ffd060', '#ff8a20', '#c23b3c', '#82232c'], SMOKE_C = ['#5d6474', '#3a3a48'];
 // 火龍動作（t = 事件開始後幾秒，tIn = 登場用了幾秒，已經停在這一邊就是 0）：
-// 登場（拍翅 ×2，從左上畫面外 ease-out 落到停棲）→ 待機 1 圈 → 飛出（拍翅 ×1，ease-in-out 到吐火位置）→ 吐火 ×3（24 fps）→ 飛回停棲（拍翅 ×1）→ 待機（之後一直停著）
+// 登場（拍翅 ×2，從左上畫面外 ease-out 落到停棲）→ 待機 1 圈 → 飛出（拍翅 ×1，ease-in-out 到吐火位置）→ 吐火 ×1（v1.6，24 fps）→ 飛回停棲（拍翅 ×1）→ 待機 1 圈 → 沿登場線反向飛出畫面（拍翅 ×1，v1.6）
 const easeOut = k => 1 - Math.pow(1 - k, 3), easeIO = k => k * k * (3 - 2 * k), lerp2 = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
 const segF = (seg, s) => Math.floor(s * DANIM.seg[seg].fps + 1e-6) % DANIM.seg[seg].n;
 function dragonPose(t, tIn) {
-  const b0 = tIn + D_OUT, ret = b0 + 3 * DBR, end = ret + D_BACK;
+  const b0 = tIn + D_OUT, ret = b0 + DBR, end = ret + D_BACK;
   if (tIn > 0 && t < D_IN) return { seg: 'hover', f: segF('hover', t), xy: lerp2(DPOS.start, DPOS.perch, easeOut(Math.max(0, t) / D_IN)) };
   if (t < tIn) return { seg: 'idle', f: segF('idle', t - D_IN), xy: DPOS.perch };
   if (t < b0) return { seg: 'hover', f: segF('hover', t - tIn), xy: lerp2(DPOS.perch, DPOS.fire, easeIO((t - tIn) / D_OUT)) };
-  if (t < ret) { const s = t - b0, i = Math.min(2, Math.floor(s / DBR + 1e-9)), f = Math.min(DANIM.seg.breath.n - 1, Math.floor((s - i * DBR) * DFPS_B + 1e-6)); return { seg: 'breath', f, xy: DPOS.fire, breath: i }; }
+  if (t < ret) { const f = Math.min(DANIM.seg.breath.n - 1, Math.floor((t - b0) * DFPS_B + 1e-6)); return { seg: 'breath', f, xy: DPOS.fire, breath: 0 }; }   // v1.6 只有一口
   if (t < end) return { seg: 'hover', f: segF('hover', t - ret), xy: lerp2(DPOS.fire, DPOS.perch, easeIO((t - ret) / D_BACK)) };
-  return { seg: 'idle', f: segF('idle', t - end), xy: DPOS.perch };
+  return leavePose(t - end);
+}
+// v1.6 退場（從飛回停棲那一刻算 s 秒）：待機 18 格播 1 圈（1.5 秒）→ 接拍翅第 0 格，沿登場那條線反過來 ease-in 飛到畫面外（1.5 秒，拍翅 1 圈）。之後不畫
+const easeIn = k => k * k * k;
+// v1.6b（Yi Way 11/21 00:09）：飛出時拍翅格左右鏡射、朝飛走方向。拍翅 18 格不透明範圍 x 6–187：鏡射後變 2–183，所以鏡射時再往右移 4 px（牆在右往左移），整隻的左右範圍跟沒鏡射時一樣（轉身不跳）
+const D_FLIP_DX = 10 + 168 - (DFW - 1);   // v1.6c：改以待機格的不透明範圍（x 10–168）中心為軸：轉身時身體留在原地，飛出也沿用同一個位移（−11 px）
+function leavePose(s) {
+  if (s < D_STAY) return { seg: 'idle', f: segF('idle', s), xy: DPOS.perch };
+  if (s < D_STAY + D_TURN) { const k = (s - D_STAY) / D_TURN; return { seg: 'idle', f: segF('idle', s), xy: DPOS.perch, sx: Math.abs(1 - 2 * k), leaving: k >= 0.5 }; }   // 轉身：前半寬度 1 → 0（原方向），後半 0 → 1（鏡射）
+  if (s < D_EXIT) return { seg: 'hover', f: segF('hover', s - D_STAY - D_TURN), xy: lerp2(DPOS.perch, DPOS.away, easeIn((s - D_STAY - D_TURN) / D_FLY)), leaving: true };
+  return null;
 }
 const dragonX = (x, R) => R ? W - DFW - x : x;   // 牆在右：整張圖左右鏡射
 // 吐火格 f 的嘴角（畫面座標）和火柱角度：json 每格的角度，前後 3 格（f−1、f、f+1，只算吐火格）平均；牆在右 x → fw−1−x、角度 → 180−角度
@@ -893,8 +921,10 @@ function drawDFrame(g, src, f, x, y, R) {   // 畫條上的第 f 格；牆在右
 }
 // 火龍現在畫哪一格、在哪（事件中照時間軸；事件結束後停棲待機）
 function dragonNow() {
-  if (dragon) { const p = dragonPose(clock - dragon.t0, dragon.tIn), R = dragon.side > 0; return { ...p, R, x: dragonX(p.xy[0], R), y: p.xy[1] }; }
-  if (perch) { const R = perch.side > 0; return { seg: 'idle', f: segF('idle', clock - perch.t0), xy: DPOS.perch, R, x: dragonX(DPOS.perch[0], R), y: DPOS.perch[1] }; }
+  if (dragon) { const p = dragonPose(clock - dragon.t0, dragon.tIn), R = dragon.side > 0; return p && { ...p, R, x: dragonX(p.xy[0], R), y: p.xy[1] }; }   // 遊戲結束後事件不再前進，時間軸走完就不畫
+  if (leaving) { const p = leavePose(clock - leaving.t0), R = leaving.side > 0; if (!p) return null;
+    if (!p.leaving) return { ...p, R, x: dragonX(p.xy[0], R), y: p.xy[1] };
+    return { ...p, R: !R, x: dragonX(p.xy[0], R) + (R ? -D_FLIP_DX : D_FLIP_DX), y: p.xy[1] }; }   // v1.6b 退場飛出：轉頭朝飛走的方向（拍翅格左右鏡射），平移 D_FLIP_DX 讓身體不跳
   return null;
 }
 // 火柱錐形（畫在 0°，畫的時候旋轉到這一格的角度）：嘴邊細、往外變寬到 40 px，邊緣兩個正弦波晃動，硬邊分色帶（中心黃白 → 黃 → 橘 → 橘紅，尾端暗紅、碎開）
@@ -923,9 +953,12 @@ function coneImg(L, ws, f) {
 const fillPx = (c, x, y, s = 1) => { ctx.fillStyle = c; ctx.fillRect(snap(x), snap(y), s, s); };
 function drawDragon() {   // 畫在背景（石牆、火把、火光）之後、平台之前：牆上任何東西都不會蓋到龍
   const d = dragonNow(); if (!d || !dragonReady()) return;
+  if (d.sx !== undefined) { const px = d.x + (d.R ? DFW - 1 - DPIVOT : DPIVOT); ctx.save(); ctx.translate(px, 0); ctx.scale(Math.max(0.001, d.sx), 1); ctx.translate(-px, 0); }   // v1.6c 轉身：以身體中心為軸縮寬度
   ctx.globalAlpha = 0.55; drawDFrame(ctx, DSHADOW[d.seg], d.f, snap(d.x + (d.R ? -2 : 2)), snap(d.y + 2), d.R); ctx.globalAlpha = 1;   // 牆上的投影
   drawDFrame(ctx, DSTRIP[d.seg], d.f, snap(d.x), snap(d.y), d.R);
+  if (d.sx !== undefined) ctx.restore();
 }
+const DPIVOT = (10 + 168) / 2;   // 待機格不透明範圍中心（沒鏡射時的格內 x）
 // 小火球 9×9：同一套分色帶（中心黃白 → 黃 → 橘 → 橘紅外框），硬邊像素
 const BALL_IMG = (() => { const c = document.createElement('canvas'); c.width = c.height = 9; const g = c.getContext('2d');
   for (let y = 0; y < 9; y++) for (let x = 0; x < 9; x++) { const d = Math.hypot(x - 4, y - 4); if (d > 4.3) continue;
@@ -1164,7 +1197,13 @@ function drawHUD() {
   ctx.fillStyle = '#11141b'; ctx.fillRect(0, 0, W, HUD_H);
   text('生命', 10, HUD_H / 2, 13, '#cfd6e4', 'left');
   for (let i = 0; i < MAX_LIFE; i++) blit(i < life ? IMG.heart : IMG.heart0, 46 + i * 15, 17);   // 像素愛心 11×10
-  text(floors + ' 層', W - 10, HUD_H / 2, 20, '#ffffff', 'right', true);
+  const fl = floors + ' 層'; text(fl, W - 10, HUD_H / 2, 20, '#ffffff', 'right', true);
+  const fw = ctx.measureText(fl).width, hi = '最高 ' + Math.max(best, floors), hiX = W - 10 - fw - 8;   // v1.6「最高 M」：樓層數左邊 8 px、11 px 灰色小字（在 HUD 裡，不蓋愛心、樓層，也不在平台區）
+  text(hi, hiX, HUD_H / 2 + 1, 11, '#8b93a5', 'right'); const hw = ctx.measureText(hi).width, x0 = 46 + MAX_LIFE * 15, x1 = hiX - hw;
+  hudL = { heart: [46, x0 - 4], floor: [W - 10 - fw, W - 10], best: [x1, hiX], banner: null };
+  if (banner) { const a = clock - banner.t0, al = a < MILE_HOLD ? 1 : Math.max(0, 1 - (a - MILE_HOLD) / MILE_FADE);   // v1.6 每 100 層：金黃色「N 層！」在愛心和「最高」中間，2 秒後 0.5 秒淡出
+    if (al > 0) { ctx.globalAlpha = al; text(banner.n + ' 層！', (x0 + x1) / 2, HUD_H / 2, 15, MILE_C, 'center', true); ctx.globalAlpha = 1; const bw = ctx.measureText(banner.n + ' 層！').width; hudL.banner = [(x0 + x1) / 2 - bw / 2, (x0 + x1) / 2 + bw / 2, al]; }
+    else banner = null; }
   ctx.fillStyle = PAL.M; ctx.fillRect(0, HUD_H - 2, W, 2);   // HUD 下緣
   for (let x = 0; x < W; x += 12) blit(IMG.ceil, x, HUD_H);    // 頂部尖刺（像素圖 12×14 一格一格接）
 }
@@ -1184,7 +1223,7 @@ function draw() {
     ['點一下或按空白鍵開始', 370, 17, '#ffffff', true], [CREDIT, 440, 12, '#aab2c3']]);
   else if (mode === 'over') panel([
     ['遊戲結束', 212, 28, '#ff6b6b', true], [overReason === 'fall' ? '掉出畫面了' : '生命歸零', 248, 14, '#cfd6e4'],
-    ['下了 ' + floors + ' 層', 300, 26, '#ffffff', true],
+    ['本次 ' + floors + ' 層／最高 ' + best + ' 層', 296, 20, '#ffffff', true], ...(newRec ? [['新紀錄！', 332, 20, MILE_C, true]] : []),
     ['點一下或按空白鍵重新開始', 370, 16, '#ffffff', true], [CREDIT, 440, 12, '#aab2c3']]);
 }
 
@@ -1220,17 +1259,18 @@ resize(); requestAnimationFrame(loop);
 // ---- 測試介面（遊戲本身不會用到）----
 window.__stairs = {
   version: VERSION, credit: CREDIT,
-  C: { W, H, HUD_H, CEIL_Y, PW, PH, PLAT_W, PLAT_H, GAP, MAX_LIFE, START_LIFE, DMG, MOVE, GRAV, MAX_FALL, SCROLL0, SCROLL_STEP, SCROLL_MAX, CEIL_INVULN: HURT_INVULN, HURT_INVULN, CEIL_PUSH, ROW2_P, ROW2_GAP, SPRING_EVERY, SPRING_V, PLAT_W2, DRAGON_EVERY, DRAGON_T, D_TIN, DRAGON_ROW2_P, PREP_A, PREP_B, DT, AIR, MIN_OV, FIRE_MIN, FIRE_MAX },
-  state: () => ({ clock, mode, life, healDue, floors, invuln, overReason, seed, games, scroll: scrollSpeed(), dir: inputDir(), ptrs: ptrs.size, lastLand: lastLand ? lastLand.id : null, dragon: dragon && { n: dragon.n, side: dragon.side, t: clock - dragon.t0, tIn: dragon.tIn, K: dragon.ev.K }, perch: perch && { side: perch.side }, dragonLog: dragonLog.slice(), evLog: evLog.map(e => ({ ...e })), evK: dragon ? dragon.ev.K : 0, evFires: dragon ? dragon.ev.fires.length : null,
+  C: { W, H, HUD_H, CEIL_Y, PW, PH, PLAT_W, PLAT_H, GAP, MAX_LIFE, START_LIFE, DMG, MOVE, GRAV, MAX_FALL, SCROLL0, SCROLL_STEP, SCROLL_MAX, CEIL_INVULN: HURT_INVULN, HURT_INVULN, CEIL_PUSH, ROW2_P, ROW2_GAP, SPRING_EVERY, SPRING_V, PLAT_W2, DRAGON_EVERY, DRAGON_T, D_TIN, DRAGON_ROW2_P, PREP_A, PREP_B, DT, AIR, MIN_OV, FIRE_MIN, FIRE_KMIN, FIRE_MAX, D_EXIT, D_STAY, D_TURN, D_FLY, D_FLIP_DX, MILE_EVERY, BEST_KEY },
+  state: () => ({ clock, mode, life, healDue, floors, invuln, overReason, seed, games, scroll: scrollSpeed(), dir: inputDir(), ptrs: ptrs.size, lastLand: lastLand ? lastLand.id : null, dragon: dragon && { n: dragon.n, side: dragon.side, t: clock - dragon.t0, tIn: dragon.tIn, K: dragon.ev.K, nb: dragon.nb }, leaving: leaving && { side: leaving.side, t: clock - leaving.t0 }, best, newRec, bestBefore, banner: banner && { n: banner.n, t: clock - banner.t0 }, mileDone, dragonLog: dragonLog.slice(), evLog: evLog.map(e => ({ ...e })), evK: dragon ? dragon.ev.K : 0, evFires: dragon ? dragon.ev.fires.length : null,
     player: player && { x: player.x, y: player.y, vy: player.vy, on: player.on ? player.on.id : null, onType: player.on ? player.on.type : null },
-    plats: plats.map(p => ({ id: p.id, row: p.row, x: p.x, w: pw(p), y: p.y, type: p.type, visited: p.visited, igniteAt: p.igniteAt || 0, lit: p.lit || 0, how: p.how || '', fb: !!(p.src && p.src.fb) })) }),
+    plats: plats.map(p => ({ id: p.id, row: p.row, x: p.x, w: pw(p), y: p.y, type: p.type, visited: p.visited, igniteAt: p.igniteAt || 0, lit: p.lit || 0, how: p.how || '', fb: !!(p.src && p.src.fb), grp: (p.igniteAt || p.lit) && p.src ? p.src.grp || '' : '' })) }),
+  hudLayout: () => hudL && { ...hudL },
   setSeed: s => { nextSeed = s >>> 0; },
   sprites: () => IMG,
   springFrame: id => { const p = plats.find(q => q.id === id); return p ? springName(p) : null; },   // 測試用：彈簧這一刻畫哪張
   girlFrame: () => girlName(),   // 測試用：女孩這一刻畫哪張
   bg: () => BG,   // 截圖用：整張背景
   dragonReady, DANIM, DPOS, dragonTimes, dragonMouthAt, colShape, edgeDist, spitFrom, DSNOUT, COL_MAX,
-  dragonNow: () => { const d = dragonNow(); return d && { seg: d.seg, f: d.f, x: d.x, y: d.y, R: d.R, breath: d.breath }; },
+  dragonNow: () => { const d = dragonNow(); return d && { seg: d.seg, f: d.f, x: d.x, y: d.y, R: d.R, breath: d.breath, leaving: !!d.leaving, sx: d.sx }; },
   dragonFrameCanvas: (seg, f, R) => { const c = document.createElement('canvas'); c.width = DFW; c.height = DFH; drawDFrame(c.getContext('2d'), DSTRIP[seg], f, 0, 0, R); return c; },   // 測試用：火龍某格原圖（牆在右時已鏡射）
   forceDragon: (n, side) => { startDragon(n, side); dragonDone = Math.max(dragonDone, n); },   // 截圖用：直接叫出火龍
   dragonPose,
@@ -1252,7 +1292,7 @@ window.__stairs = {
   noPick: b => { noPickTest = !!b; },   // 測試用：三口吐火都不挑平台，只留保底延長   // 測試用：長時間測火龍時補血，免得她先死在天花板
   step: (n = 1) => { for (let i = 0; i < n; i++) step(DT); if (!noDraw) draw(); },
   noDraw: b => { noDraw = !!b; },   // 測試快轉時不重畫（v1.3 背景和圖變大後，每步都重畫是測試變慢的主因）
-  genRows, simRows, makeGen, nextRow, chooseFire, fireTarget, breathGoal,
+  genRows, simRows, makeGen, nextRow, chooseFire, fireTarget, leavePose,
   setK: k => { if (dragon) dragon.ev.K = k; },   // 測試用：指定這次事件的目標塊數
   reachable,
   // 機器人用：從場上第 id 塊平台出發的路線（跟生成器同一套規則）
