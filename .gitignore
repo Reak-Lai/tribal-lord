@@ -1,0 +1,2 @@
+# 音效檔不放進公開 repo（企劃 2026-11-21 授權守備決定）：只內嵌在 index.html。本機 build 照常讀 src/sfx/，從 SOUNDS.md 的原始網址重新下載
+src/sfx/*.mp3

@@ -1,7 +1,8 @@
-// 阿斑下樓梯 Banban v1.6（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
+// 阿斑下樓梯 Banban v1.7（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
 (() => {
 'use strict';
-const VERSION = '阿斑下樓梯 v1.6';
+const VERSION = '阿斑下樓梯 v1.7';
+const SFX_CREDIT = '音效：www.casper.tw/sound-effects';   // v1.7 規格第 4 節：標題畫面最下方一行小字
 const CREDIT = '同人作品｜原作 NS-SHAFT／NAGI-P SOFT';
 
 // ---- 數值（邏輯座標：畫面 360×640，整張畫布等比縮放）----
@@ -223,6 +224,56 @@ const BEST_KEY = 'banban-stairs-best';
 function loadBest() { try { const v = parseInt(window.localStorage.getItem(BEST_KEY), 10); return v > 0 ? v : 0; } catch (e) { return 0; } }
 best = loadBest();
 function saveBest(v) { try { window.localStorage.setItem(BEST_KEY, String(v)); } catch (e) { /* 存不進去：這一頁還是記得 */ } }
+// ---- v1.7 音效（規格 stairs-v1.7-spec.md）----
+// 12 個 mp3 原檔由 build.js 以 base64 內嵌（單檔、離線可用）；src/index.html 分開開時是 null = 沒有音效。
+// 開場就解碼全部（OfflineAudioContext，不會出聲）；第一次點擊／按鍵才建立 AudioContext。任何一步失敗都安靜略過那個音，遊戲照常。
+const SFX_DATA = null;
+const SFX_NAMES = ['fall', 'fire', 'ceiling-hurt', 'land', 'spike-hurt', 'spring', 'heal', 'dragon-in', 'floor100', 'record', 'gameover', 'click'];
+const SFX_VOL = { land: 0.35, fire: 0.6, gameover: 0.8 };
+const SFX_RATE = { gameover: 1.5 };   // 播放速度（Yi Way 11/21 12:23：遊戲結束音 1.5 倍、約 2.37 秒，音調跟著變高；音檔不改）。沒寫的 = 1   // 音量倍率（開發暫定，不改音檔；最後由 Yi Way 試玩決定）。沒寫的 = 1
+const SFX_LAND_GAP = 0.1, SFX_FALL_GO = 0.8;   // 著地、彈簧 0.1 秒內只播一次（彈簧：企劃 11/21，只改音效）；落下死亡：落下音之後 0.8 秒接遊戲結束音（落下音有聲部分約 0.6–0.7 秒），結算畫面照舊立刻出現
+const MUTE_KEY = 'banban-stairs-mute';
+const SFX_BUF = {}, sfxSrc = {}, sfxLog = [];
+let actx = null, sfxBus = null, sfxGesture = false, sfxLast = {};   // sfxLast：著地／彈簧上一次真的播出的遊戲時間
+let muted = (() => { try { return window.localStorage.getItem(MUTE_KEY) === '1'; } catch (e) { return false; } })();   // localStorage 不能用 = 有聲、只在這一頁有效
+(() => { try {
+  const O = window.OfflineAudioContext || window.webkitOfflineAudioContext; if (!SFX_DATA || !O) return;
+  const oc = new O(1, 1, 44100);
+  for (const n of SFX_NAMES) { try {
+    const b = atob(SFX_DATA[n]), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+    const pr = oc.decodeAudioData(u.buffer, buf => { SFX_BUF[n] = buf; }, () => {}); if (pr && pr.catch) pr.catch(() => {});
+  } catch (e) { /* 這個音不能用：略過 */ } }
+} catch (e) { /* 沒有 Web Audio：整個沒聲音 */ } })();
+function sfxUnlock() {   // 使用者手勢裡呼叫：第一次建立 AudioContext、之後只負責 resume（iOS 另外在手勢裡播 1 個無聲樣本）
+  try {
+    if (!actx) { const A = window.AudioContext || window.webkitAudioContext; if (!A) return; actx = new A(); sfxBus = actx.createGain(); sfxBus.connect(actx.destination);
+      const s = actx.createBufferSource(); s.buffer = actx.createBuffer(1, 1, 22050); s.connect(actx.destination); s.start(0); }
+    if (actx.state !== 'running' && !document.hidden) { const pr = actx.resume(); if (pr && pr.catch) pr.catch(() => {}); }
+    sfxGesture = true; setTimeout(() => { sfxGesture = false; }, 0);
+  } catch (e) { /* 不能出聲就算了 */ }
+}
+function sfxStop(n) { const o = sfxSrc[n]; if (!o) return; delete sfxSrc[n]; try { o.s.stop(); } catch (e) { /* 已經停了 */ } }
+function sfxStopAll() { for (const n in sfxSrc) sfxStop(n); }
+const sfxLeft = n => sfxSrc[n] && actx ? Math.max(0, sfxSrc[n].end - actx.currentTime) : 0;   // 這個音還要播幾秒（沒在播 = 0）
+function sfx(n, delay = 0) {   // 播一個音：同一個音再觸發就從頭重播（先停舊的），不同的音可以重疊。delay 秒後才開始
+  const e = { n, t: +clock.toFixed(4), delay: +delay.toFixed(4) };
+  if (!actx || !(actx.state === 'running' || sfxGesture)) e.st = 'locked';   // 第一次點擊前（或被系統暫停中）不出聲
+  else if (muted) e.st = 'muted';
+  else if (!SFX_BUF[n]) e.st = 'missing';
+  else if ((n === 'land' || n === 'spring') && sfxLast[n] !== undefined && clock - sfxLast[n] < SFX_LAND_GAP) e.st = 'dedup';
+  else { try {
+    sfxStop(n); const s = actx.createBufferSource(), g = actx.createGain(), at = actx.currentTime + delay, buf = SFX_BUF[n];
+    s.buffer = buf; s.playbackRate.value = SFX_RATE[n] || 1; g.gain.value = SFX_VOL[n] || 1; s.connect(g); g.connect(sfxBus); s.start(at);
+    const o = sfxSrc[n] = { s, end: at + buf.duration / (SFX_RATE[n] || 1) };   // 真正播完的時間（新紀錄音等它） s.onended = () => { if (sfxSrc[n] === o) delete sfxSrc[n]; };
+    e.st = 'play'; sfxLast[n] = clock;
+  } catch (er) { e.st = 'error'; } }
+  sfxLog.push(e); if (sfxLog.length > 600) sfxLog.splice(0, 300);
+  return e.st === 'play';
+}
+function setMuted(m) { muted = !!m; try { window.localStorage.setItem(MUTE_KEY, muted ? '1' : '0'); } catch (e) { /* 存不進去：只在這一頁有效 */ } if (muted) sfxStopAll(); else sfx('click'); }   // 靜音：馬上停掉所有聲音；恢復：播按鈕聲
+function sfxPause() { sfxStopAll(); try { if (actx && actx.state === 'running') actx.suspend(); } catch (e) { /* 略過 */ } }   // 切到背景／鎖螢幕：全部停掉（排好還沒播的也取消），回來不補播
+function sfxResume() { try { if (actx && actx.state !== 'running') { const pr = actx.resume(); if (pr && pr.catch) pr.catch(() => {}); } } catch (e) { /* 等下一次點擊 */ } }
+const MUTE_BTN = { x: 296, y: 174, w: 36, h: 36 };   // 喇叭鈕：標題／結算面板（24–336 × 170–470）的右上角；遊戲中不畫、不能按
 const scrollSpeed = () => Math.min(SCROLL_MAX, SCROLL0 * (1 + SCROLL_STEP * Math.floor(floors / 10)));
 
 function fill() { while (lastY < H + GAP * 2) { const r = nextRow(gen); lastY += GAP; rowN++; for (const q of r) plats.push({ x: q.x, w: pw(q), y: lastY, py: lastY, type: q.type, id: ++nextId, row: rowN, visited: false, src: q }); } }   // src：生成器裡同一塊（點火時一起改，之後的排才會照著留路）   // 每排 1～2 塊，row = 從起點往下第幾排
@@ -234,6 +285,7 @@ function newGame(s) {
   player = { x: W / 2 - PW / 2, y: lastY - GAP * 0 - PH, vy: 0, on: plats[0], ignore: null };
   player.y = plats[0].y - PH;
   life = START_LIFE; floors = 0; invuln = 0; hurtT = 0; healDue = false; noHealOn = null; healedOn = new Set(); overReason = ''; mode = 'play'; games++;
+  sfxStop('gameover'); sfxStop('record'); sfxLast = {};   // v1.7：上一局結算還沒播完（或排著）的結束音、新紀錄音不帶進新的一局
   ptrs.clear();
 }
 function hurt(n) { life = Math.max(0, life - n); hurtT = 0.4; healDue = true; noHealOn = player.on || lastLand; healedOn = new Set(); }   // 受傷：記下待回血；當下那塊（站著的，或彈簧彈起來還在空中時剛彈的那塊）不算
@@ -241,10 +293,12 @@ function land(p) {
   player.on = p; player.vy = 0; player.y = p.y - PH;
   p.visited = true; floors = Math.max(floors, p.row); lastLand = p; checkDragon(); checkMile();   // 層數 = 實際往下到第幾排，跳過的也算；往回不減
   if (hurts(p)) spikeHit();   // 釘板、火焰平台
-  else if (healDue && (p.type === 'spring' ? invuln <= 0 : (p !== noHealOn && !healedOn.has(p)))) { healedOn.add(p); life = Math.min(MAX_LIFE, life + HEAL); if (life >= MAX_LIFE) healDue = false; }   // 安全階梯（含彈簧、還沒點燃的平台）+1，補滿為止。v1.5.1（Yi Way 11/15 01:08）：彈簧例外，每次落上去都算（同一個彈簧連彈也算）。v1.5.1 定案（02:13）：閃爍（無敵）中落在彈簧上不回血
-  if (p.type === 'spring') { player.on = null; player.vy = -SPRING_V; p.springT = clock; }   // 彈起來；落回同一塊會再彈
+  else if (healDue && (p.type === 'spring' ? invuln <= 0 : (p !== noHealOn && !healedOn.has(p)))) { healedOn.add(p); const l0 = life; life = Math.min(MAX_LIFE, life + HEAL); if (life >= MAX_LIFE) healDue = false; if (life > l0) sfx('heal'); }   // 安全階梯（含彈簧、還沒點燃的平台）+1，補滿為止。v1.5.1（Yi Way 11/15 01:08）：彈簧例外，每次落上去都算（同一個彈簧連彈也算）。v1.5.1 定案（02:13）：閃爍（無敵）中落在彈簧上不回血
+  player.sprung = p.type === 'spring' ? p : null; player.sprungHit = false;   // v1.7（Yi Way 12:29）：記下這次是不是被彈簧彈起、這次彈起撞頂刺扣過了沒
+  if (p.type === 'spring') { player.on = null; player.vy = -SPRING_V; p.springT = clock; sfx('spring'); }
+  else if (!hurts(p)) sfx('land');   // v1.7：一般平台（含還沒著火的）播著地；彈簧、釘板、火焰各播自己的音   // 彈起來；落回同一塊會再彈
 }
-function spikeHit() { if (invuln <= 0) { hurt(DMG); invuln = HURT_INVULN; } }   // 釘板／火焰：扣 1、閃 1.0 秒；閃完還站著就再扣
+function spikeHit() { if (invuln <= 0) { hurt(DMG); invuln = HURT_INVULN; sfx('spike-hurt'); } }   // 釘板／火焰：扣 1、閃 1.0 秒；閃完還站著就再扣
 // v1.4 火龍：樓層第一次到 100、200… 時出現（背景，沒有碰撞）
 function checkDragon() {
   const n = Math.floor(floors / DRAGON_EVERY);
@@ -253,8 +307,8 @@ function checkDragon() {
 // v1.6 每 100 層祝賀：樓層第一次到（或跳過）100、200… 時在 HUD 那一行顯示金黃色「N 層！」，約 2 秒後淡出；每個里程碑只一次，不暫停
 const MILE_EVERY = 100, MILE_HOLD = 2.0, MILE_FADE = 0.5, MILE_C = '#ffd34d';   // 金黃色 = 標題「阿斑下樓梯」同一個色
 let hudL = null;   // 測試用：HUD 上各區塊的 x 範圍
-function checkMile() { const m = Math.floor(floors / MILE_EVERY); if (m > mileDone) { mileDone = m; banner = { n: m * MILE_EVERY, t0: clock }; } }
-function startDragon(n, side) { leaving = null; dragon = { n, t0: clock, side, tIn: D_TIN, nb: 0, lastTry: 0, ev: { fires: [], K: fireTarget(frng), n } }; }   // v1.6：上一次已經飛走，每次都從畫面外登場   // 已經停在這一邊就直接飛出；換邊時舊的那隻直接不見、新的從畫面上方登場（開發自訂，待企劃確認）
+function checkMile() { const m = Math.floor(floors / MILE_EVERY); if (m > mileDone) { mileDone = m; banner = { n: m * MILE_EVERY, t0: clock }; sfx('floor100'); } }
+function startDragon(n, side) { leaving = null; dragon = { n, t0: clock, side, tIn: D_TIN, nb: 0, lastTry: 0, ev: { fires: [], K: fireTarget(frng), n } }; sfx('dragon-in'); }   // v1.6：上一次已經飛走，每次都從畫面外登場   // 已經停在這一邊就直接飛出；換邊時舊的那隻直接不見、新的從畫面上方登場（開發自訂，待企劃確認）
 // v1.6 只噴一口：噴出前 0.25 秒從她下方的平台挑 K 塊（pickFire）；挑不滿就每 0.1 秒補挑到 K，直到這一口吐火格結束（不到 1 塊時用最快的火球、再不行放寬同排安全）；
 // 之後到飛回停棲為止，還沒有 1 塊的話她一落地就補吐火球保底（lateFire：下方 → 下方放寬 → 上方最多 1 塊）。退場（待機＋飛出）不點火
 function dragonFire() {
@@ -339,7 +393,8 @@ function pickFire(bi, want, force, relax = false) {   // bi = 第幾口（0–2�
     else { p.igniteAt = pl.at + 0.04 * n; balls.push({ p, go: pl.go + 0.04 * n, at: pl.at + 0.04 * n, from: pl.from, dir }); n++; }   // 好幾顆時一顆接一顆吐
   }
 }
-function gameOver(why) { mode = 'over'; overReason = why; overAt = clock; bestBefore = best; newRec = floors > best; if (newRec) { best = floors; saveBest(best); } }   // v1.6：破紀錄就存
+function gameOver(why) { mode = 'over'; overReason = why; overAt = clock; bestBefore = best; newRec = floors > best; if (newRec) { best = floors; saveBest(best); }
+  if (why === 'fall') sfx('fall'); sfx('gameover', why === 'fall' ? SFX_FALL_GO : 0); if (newRec) sfx('record', sfxLeft('gameover')); }   // v1.7：新紀錄等結束音播完才播   // v1.6：破紀錄就存
 
 function step(dt) {
   clock += dt;
@@ -352,6 +407,7 @@ function step(dt) {
   if (leaving && clock - leaving.t0 >= D_EXIT) leaving = null;   // 飛出畫面了
   fill();
   if (dragon) dragonFire();
+  if (dragon && !dragon.sfxFire && clock - dragon.t0 >= fireStart(dragon.tIn, 0)) { dragon.sfxFire = true; sfx('fire'); }   // v1.7：噴火第一格（第 31 格）
   balls = balls.filter(b => clock < b.at && b.p.igniteAt && plats.includes(b.p));   // 火球落地（或平台捲出畫面）就消失
   for (const p of plats) if (p.igniteAt && !p.lit && clock >= p.igniteAt + IGN_FLASH) {
     if (player.on === p) { p.src.type = 'normal'; p.igniteAt = 0; p.how = ''; p.late = false; const f = p.ev.fires; f.splice(f.indexOf(p.src), 1); if (p.src.fb) { p.src.fb = false; p.ev.fb--; } p.fb = false; }   // 她剛好站上去：取消（改回一般平台一定還有路），保底會再挑
@@ -376,9 +432,11 @@ function step(dt) {
   }
   if (player.y < CEIL_Y) {     // 頂部尖刺
     player.y = CEIL_Y;
-    if (invuln <= 0) { hurt(DMG); invuln = HURT_INVULN; }
+    const sp = player.sprung;   // v1.7 彈簧撞頂刺（Yi Way 12:29）：彈簧彈起撞到頂刺，不管閃爍都扣 1、每次彈起最多 1；不穿過彈簧
+    if (sp ? !player.sprungHit : invuln <= 0) { if (sp) player.sprungHit = true; hurt(DMG); invuln = HURT_INVULN; sfx('ceiling-hurt'); }   // 一般平台被捲到頂刺照舊（閃爍中不扣）
     if (player.on) { player.ignore = player.on; player.on = null; }
     player.vy = Math.max(player.vy, CEIL_PUSH);
+    if (sp && plats.includes(sp) && sp.y < player.y + PH && sp.y + PLAT_H > player.y && player.x < sp.x + pw(sp) && player.x + PW > sp.x) { land(sp); player.y = CEIL_Y; }   // 彈簧頂面已經容不下她（被捲進頂刺）：落回同一塊彈簧再彈（不穿過、不卡進頂刺）。沒有「擠扁就死」：每次彈起照樣只扣 1、一幀最多 1，扣到 0 才死（Yi Way 12:31）
   }
   if (life <= 0) gameOver('life');
   else if (player.y > H) gameOver('fall');
@@ -1220,11 +1278,19 @@ function draw() {
   if (mode === 'title') panel([
     ['阿斑下樓梯', 212, 30, '#ffd34d', true], ['Banban　' + VERSION.split(' ')[1], 244, 13, '#8b93a5'],
     ['手機：按住左／右半邊移動', 290, 15, '#e6e9f0'], ['電腦：← → 方向鍵', 316, 15, '#e6e9f0'],
-    ['點一下或按空白鍵開始', 370, 17, '#ffffff', true], [CREDIT, 440, 12, '#aab2c3']]);
+    ['點一下或按空白鍵開始', 370, 17, '#ffffff', true], [CREDIT, 440, 12, '#aab2c3'], [SFX_CREDIT, 459, 11, '#8b93a5']]);
   else if (mode === 'over') panel([
     ['遊戲結束', 212, 28, '#ff6b6b', true], [overReason === 'fall' ? '掉出畫面了' : '生命歸零', 248, 14, '#cfd6e4'],
     ['本次 ' + floors + ' 層／最高 ' + best + ' 層', 296, 20, '#ffffff', true], ...(newRec ? [['新紀錄！', 332, 20, MILE_C, true]] : []),
     ['點一下或按空白鍵重新開始', 370, 16, '#ffffff', true], [CREDIT, 440, 12, '#aab2c3']]);
+  if (mode !== 'play') drawMute();
+}
+function drawMute() {   // v1.7 喇叭圖示（向量線條）：有聲 = 兩道聲波，靜音 = 叉叉
+  const { x, y, w, h } = MUTE_BTN, cx = x + w / 2, cy = y + h / 2; ctx.save(); ctx.fillStyle = ctx.strokeStyle = '#e6e9f0'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(cx - 11, cy - 4); ctx.lineTo(cx - 6, cy - 4); ctx.lineTo(cx, cy - 10); ctx.lineTo(cx, cy + 10); ctx.lineTo(cx - 6, cy + 4); ctx.lineTo(cx - 11, cy + 4); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); if (muted) { ctx.moveTo(cx + 4, cy - 5); ctx.lineTo(cx + 12, cy + 5); ctx.moveTo(cx + 12, cy - 5); ctx.lineTo(cx + 4, cy + 5); }
+  else { ctx.arc(cx + 1, cy, 6, -Math.PI / 4, Math.PI / 4); ctx.moveTo(cx + 1 + 11 * Math.cos(-Math.PI / 4), cy + 11 * Math.sin(-Math.PI / 4)); ctx.arc(cx + 1, cy, 11, -Math.PI / 4, Math.PI / 4); }
+  ctx.stroke(); ctx.restore();
 }
 
 // ---- 事件 ----
@@ -1235,9 +1301,11 @@ function loop(ts) {
 }
 function tryStart() { if (mode === 'title' || (mode === 'over' && clock - overAt > 0.4)) { newGame(); return true; } return false; }
 const sideOf = e => (e.clientX < window.innerWidth / 2 ? -1 : 1);
+const onMute = e => { const r = cv.getBoundingClientRect(), x = (e.clientX - r.left) / cssScale, y = (e.clientY - r.top) / cssScale, B = MUTE_BTN;
+  return x >= B.x - 4 && x <= B.x + B.w + 4 && y >= B.y - 4 && y <= B.y + B.h + 4; };   // 點到喇叭鈕（四周多 4 px 好按）
 window.addEventListener('pointerdown', e => {
-  e.preventDefault();
-  if (mode !== 'play') { tryStart(); return; }
+  e.preventDefault(); sfxUnlock();
+  if (mode !== 'play') { if (onMute(e)) setMuted(!muted); else if (tryStart()) sfx('click'); return; }
   const r = cv.getBoundingClientRect();
   if (e.clientY < r.top + HUD_H * cssScale) return;   // HUD 區不算觸控區
   ptrs.set(e.pointerId, { dir: sideOf(e), ord: ++order });
@@ -1246,19 +1314,25 @@ window.addEventListener('pointermove', e => { const p = ptrs.get(e.pointerId); i
 for (const t of ['pointerup', 'pointercancel']) window.addEventListener(t, e => ptrs.delete(e.pointerId));
 window.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); if (!keys[e.key]) keys[e.key] = ++order; return; }
-  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!e.repeat) tryStart(); }
+  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); sfxUnlock(); if (!e.repeat && tryStart()) sfx('click'); }
 });
 window.addEventListener('keyup', e => { if (e.key in keys) keys[e.key] = 0; });
 window.addEventListener('blur', clearInput);
-window.addEventListener('pagehide', clearInput);
-document.addEventListener('visibilitychange', () => { if (document.hidden) clearInput(); });
+window.addEventListener('pagehide', () => { clearInput(); sfxPause(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { clearInput(); sfxPause(); } else sfxResume(); });
+for (const t of ['pointerup', 'touchend']) window.addEventListener(t, () => { if (actx) sfxUnlock(); });   // iOS：有些版本要在放開時才准 resume（第一次點擊之後才有作用）
 window.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('resize', resize);
 resize(); requestAnimationFrame(loop);
 
 // ---- 測試介面（遊戲本身不會用到）----
 window.__stairs = {
-  version: VERSION, credit: CREDIT,
+  version: VERSION, credit: CREDIT, sfxCredit: SFX_CREDIT,
+  // v1.7 音效（測試用）：每次觸發的紀錄 { n: 音名, t: 遊戲時間, delay, st: play／locked／muted／missing／dedup／error }
+  sfxLog: () => sfxLog.map(e => ({ ...e })), sfxClear: () => { sfxLog.length = 0; },
+  sfxState: () => ({ ctx: actx ? actx.state : null, t: actx ? actx.currentTime : 0, muted, loaded: Object.keys(SFX_BUF).sort(), playing: Object.keys(sfxSrc).sort(), names: SFX_NAMES.slice(), vol: { ...SFX_VOL }, rate: { ...SFX_RATE }, dur: Object.fromEntries(Object.entries(SFX_BUF).map(([k, b]) => [k, b.duration])) }),
+  sfxTap: () => { if (!sfxBus) return null; const a = actx.createAnalyser(); a.fftSize = 2048; sfxBus.connect(a); const d = new Float32Array(a.fftSize); return () => { a.getFloatTimeDomainData(d); let m = 0; for (const v of d) m = Math.max(m, Math.abs(v)); return m; }; },   // 回傳量峰值的函式（確認真的有聲音在跑）
+  sfx: (n, d) => sfx(n, d), muteBtn: () => ({ ...MUTE_BTN }), cssScale: () => cssScale, gameOver: why => gameOver(why),
   C: { W, H, HUD_H, CEIL_Y, PW, PH, PLAT_W, PLAT_H, GAP, MAX_LIFE, START_LIFE, DMG, MOVE, GRAV, MAX_FALL, SCROLL0, SCROLL_STEP, SCROLL_MAX, CEIL_INVULN: HURT_INVULN, HURT_INVULN, CEIL_PUSH, ROW2_P, ROW2_GAP, SPRING_EVERY, SPRING_V, PLAT_W2, DRAGON_EVERY, DRAGON_T, D_TIN, DRAGON_ROW2_P, PREP_A, PREP_B, DT, AIR, MIN_OV, FIRE_MIN, FIRE_KMIN, FIRE_MAX, D_EXIT, D_STAY, D_TURN, D_FLY, D_FLIP_DX, MILE_EVERY, BEST_KEY },
   state: () => ({ clock, mode, life, healDue, floors, invuln, overReason, seed, games, scroll: scrollSpeed(), dir: inputDir(), ptrs: ptrs.size, lastLand: lastLand ? lastLand.id : null, dragon: dragon && { n: dragon.n, side: dragon.side, t: clock - dragon.t0, tIn: dragon.tIn, K: dragon.ev.K, nb: dragon.nb }, leaving: leaving && { side: leaving.side, t: clock - leaving.t0 }, best, newRec, bestBefore, banner: banner && { n: banner.n, t: clock - banner.t0 }, mileDone, dragonLog: dragonLog.slice(), evLog: evLog.map(e => ({ ...e })), evK: dragon ? dragon.ev.K : 0, evFires: dragon ? dragon.ev.fires.length : null,
     player: player && { x: player.x, y: player.y, vy: player.vy, on: player.on ? player.on.id : null, onType: player.on ? player.on.type : null },
