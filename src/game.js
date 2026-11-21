@@ -1,7 +1,7 @@
-// 阿斑下樓梯 Banban v1.7（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
+// 阿斑下樓梯 Banban v1.7.2（同人作品，原作 NS-SHAFT／NAGI-P SOFT）。單檔腳本，不用模組，file:// 可直接開。
 (() => {
 'use strict';
-const VERSION = '阿斑下樓梯 v1.7';
+const VERSION = '阿斑下樓梯 v1.7.2';
 const SFX_CREDIT = '音效：www.casper.tw/sound-effects';   // v1.7 規格第 4 節：標題畫面最下方一行小字
 const CREDIT = '同人作品｜原作 NS-SHAFT／NAGI-P SOFT';
 
@@ -84,7 +84,7 @@ function nextMain(g) {
 // v1.3 必死檢查（生成器和遊戲裡的機器人共用的規則）：從平台 X 走到某一邊、離開後往外飄 0..AIR 再直直掉，
 // 往下第一排「靠近」這條路（2 px 內）的平台裡不能有釘板／火焰，且至少一塊一般平台／彈簧重疊 ≥ MIN_OV
 const ovl = (a, p) => Math.min(a + PW, p.x + pw(p)) - Math.max(a, p.x);
-const hurts = p => p.type === 'spike' || p.type === 'fire';   // 會扣血的平台
+const hurts = p => p.type === 'spike' || p.type === 'fire' || (p.type === 'spring' && !!p.lit);   // 會扣血的平台；v1.7.2：著火彈簧也扣血（仍是彈簧）
 function colGood(rowAt, x, i) {
   for (let j = i + 1; j <= i + 4; j++) {
     const ps = rowAt(j); if (!ps) return false;
@@ -244,10 +244,12 @@ const SFX_DATA = null;
 const SFX_NAMES = ['fall', 'fire', 'ceiling-hurt', 'land', 'spike-hurt', 'spring', 'heal', 'dragon-in', 'floor100', 'record', 'gameover', 'click'];
 const SFX_VOL = { land: 0.35, fire: 0.6, gameover: 0.8 };
 const SFX_RATE = { gameover: 1.5, heal: 1.5 };   // 播放速度（Yi Way 11/21 12:23：遊戲結束音 1.5 倍、約 2.37 秒；v1.8 Yi Way 11/21 下午：回血音 1.5 倍；音調跟著變高；音檔不改）。沒寫的 = 1   // 音量倍率（開發暫定，不改音檔；最後由 Yi Way 試玩決定）。沒寫的 = 1
+const SFX_GAIN = 1.5;   // v1.7.2（Yi Way 15:20）：全部音效的總增益 G；各音效相對比例（SFX_VOL）不變
+const SFX_COMP = { threshold: -6, knee: 0, ratio: 20, attack: 0, release: 0.05 };   // v1.7.2：總音量 > 1 時，sfxBus 後接壓縮器，輸出峰值 ≤ −0.1 dBFS（參數以 Chromium／WebKit 實測為準；WebKit 較嚴）
 const SFX_LAND_GAP = 0.1, SFX_FALL_GO = 0.8;   // 著地、彈簧 0.1 秒內只播一次（彈簧：企劃 11/21，只改音效）；落下死亡：落下音之後 0.8 秒接遊戲結束音（落下音有聲部分約 0.6–0.7 秒），結算畫面照舊立刻出現
 const MUTE_KEY = 'banban-stairs-mute';
 const SFX_BUF = {}, sfxSrc = {}, sfxLog = [];
-let actx = null, sfxBus = null, sfxGesture = false, sfxLast = {};   // sfxLast：著地／彈簧上一次真的播出的遊戲時間
+let actx = null, sfxBus = null, sfxComp = null, sfxGesture = false, sfxLast = {};   // sfxLast：著地／彈簧上一次真的播出的遊戲時間；sfxComp：總音量 > 1 時的壓縮器
 let muted = (() => { try { return window.localStorage.getItem(MUTE_KEY) === '1'; } catch (e) { return false; } })();   // localStorage 不能用 = 有聲、只在這一頁有效
 (() => { try {
   const O = window.OfflineAudioContext || window.webkitOfflineAudioContext; if (!SFX_DATA || !O) return;
@@ -259,7 +261,9 @@ let muted = (() => { try { return window.localStorage.getItem(MUTE_KEY) === '1';
 } catch (e) { /* 沒有 Web Audio：整個沒聲音 */ } })();
 function sfxUnlock() {   // 使用者手勢裡呼叫：第一次建立 AudioContext、之後只負責 resume（iOS 另外在手勢裡播 1 個無聲樣本）
   try {
-    if (!actx) { const A = window.AudioContext || window.webkitAudioContext; if (!A) return; actx = new A(); sfxBus = actx.createGain(); sfxBus.connect(actx.destination);
+    if (!actx) { const A = window.AudioContext || window.webkitAudioContext; if (!A) return; actx = new A(); sfxBus = actx.createGain(); sfxBus.gain.value = SFX_GAIN;
+      if (SFX_GAIN > 1) { sfxComp = actx.createDynamicsCompressor(); sfxComp.threshold.value = SFX_COMP.threshold; sfxComp.knee.value = SFX_COMP.knee; sfxComp.ratio.value = SFX_COMP.ratio; sfxComp.attack.value = SFX_COMP.attack; sfxComp.release.value = SFX_COMP.release; sfxBus.connect(sfxComp); sfxComp.connect(actx.destination); }
+      else sfxBus.connect(actx.destination);
       const s = actx.createBufferSource(); s.buffer = actx.createBuffer(1, 1, 22050); s.connect(actx.destination); s.start(0); }
     if (actx.state !== 'running' && !document.hidden) { const pr = actx.resume(); if (pr && pr.catch) pr.catch(() => {}); }
     sfxGesture = true; setTimeout(() => { sfxGesture = false; }, 0);
@@ -421,7 +425,7 @@ function step(dt) {
   for (const p of plats) if (p.igniteAt && !p.lit && clock >= p.igniteAt + IGN_FLASH) {
     const feetNext = player.y + PH + (player.on ? 0 : Math.max(0, Math.min(MAX_FALL, player.vy + GRAV * dt)) * dt), landsNow = !player.on && feetNext > player.y + PH && p.y >= player.y + PH - 0.001 && p.y <= feetNext && player.x < p.x + pw(p) && player.x + PW > p.x;   // 這一步她會掉到哪（點燃在她移動之前判斷）
     if (player.on !== p && !landsNow && p.y <= feetNext + 2) { p.src.type = p.src.orig || 'normal'; p.igniteAt = 0; p.how = ''; p.late = false; const f = p.ev.fires; f.splice(f.indexOf(p.src), 1); p.ev.aboveCancel = (p.ev.aboveCancel || 0) + 1; }   // v1.8 上方完全禁止：點燃那一刻她已經掉到它下面（頂面不低於腳底 + 2）就不點，保底會再挑
-    else { if (player.on === p) p.ev.landFirst = (p.ev.landFirst || 0) + 1; p.type = 'fire'; p.lit = clock; }   // v1.8（取代 v1.5 取消）：她先落上去才點燃，照樣點燃、照著火平台扣 1
+    else { if (player.on === p && p.ev) p.ev.landFirst = (p.ev.landFirst || 0) + 1; if (p.type !== 'spring') p.type = 'fire'; p.lit = clock; }   // v1.8（取代 v1.5 取消）：她先落上去才點燃，照樣點燃、扣 1。v1.7.2：彈簧著火後仍是彈簧（彈、扣 1 心、不回血）
   }
   invuln = Math.max(0, invuln - dt); hurtT = Math.max(0, hurtT - dt); bgOff += sp * dt;
   player.x = Math.min(W - PW, Math.max(0, player.x + inputDir() * MOVE * dt));
@@ -1228,17 +1232,22 @@ const FONT = '"PingFang TC","Noto Sans TC","Noto Sans CJK TC","Microsoft JhengHe
 const font = (px, b) => (b ? 'bold ' : '') + px + 'px ' + FONT;
 function text(s, x, y, px, color, align = 'center', bold = false) { ctx.font = font(px, bold); ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); }
 
+function drawFireOn(p, n) {   // 火苗 3 格動畫；剛點燃的 0.3 秒火苗由矮變高（3 格）。著火彈簧和火焰平台共用
+  const img = IMG['fire' + n + (Math.floor(clock * 8 + p.id) % 3)], g = p.lit ? clock - p.lit : 9;
+  if (g < IGN_SPROUT) { const sh = 2 * (1 + Math.floor(g / (IGN_SPROUT / 3))); ctx.drawImage(img, 0, 6 - sh, img.width, 12 + sh, snap(p.x), snap(p.y - sh), img.width, 12 + sh); }
+  else blit(img, p.x, p.y - 6);
+}
 function drawPlat(p) {
   const n = '';   // v1.5：單塊、雙塊同一套 64 px 圖
   if (p.type === 'spike') blit(IMG['spike' + n], p.x, p.y - 4);   // 刺往上多畫 4 px，判定不變
   else if (p.type === 'spring') {   // 彈簧板（判定跟一般平台一樣）。v1.5：落地當下壓縮 0.06 秒 → 伸展 0.20 秒（她開始往下落就停）→ 待機；底座固定在判定底部
     const img = IMG[springName(p)];
     blit(img, p.x, p.y + PLAT_H - img.height);
+    if (p.lit) drawFireOn(p, n);   // v1.7.2：著火彈簧仍畫彈簧，再疊火苗
+    else if (p.igniteAt && clock >= p.igniteAt) { ctx.fillStyle = 'rgba(255,250,235,0.9)'; ctx.fillRect(snap(p.x), snap(p.y), pw(p), PLAT_H); }
   }
   else if (p.type === 'fire') {   // 火焰平台：火苗 3 格動畫；剛點燃的 0.3 秒火苗由矮變高（3 格）
-    const img = IMG['fire' + n + (Math.floor(clock * 8 + p.id) % 3)], g = p.lit ? clock - p.lit : 9;
-    if (g < IGN_SPROUT) { const sh = 2 * (1 + Math.floor(g / (IGN_SPROUT / 3))); ctx.drawImage(img, 0, 6 - sh, img.width, 12 + sh, snap(p.x), snap(p.y - sh), img.width, 12 + sh); }
-    else blit(img, p.x, p.y - 6);
+    drawFireOn(p, n);
   }
   else { blit(IMG['plat' + n], p.x, p.y);
     if (p.igniteAt && clock >= p.igniteAt) { ctx.fillStyle = 'rgba(255,250,235,0.9)'; ctx.fillRect(snap(p.x), snap(p.y), pw(p), PLAT_H); }   // 點燃瞬間閃白 0.1 秒
@@ -1340,9 +1349,34 @@ window.__stairs = {
   version: VERSION, credit: CREDIT, sfxCredit: SFX_CREDIT,
   // v1.7 音效（測試用）：每次觸發的紀錄 { n: 音名, t: 遊戲時間, delay, st: play／locked／muted／missing／dedup／error }
   sfxLog: () => sfxLog.map(e => ({ ...e })), sfxClear: () => { sfxLog.length = 0; },
-  sfxState: () => ({ ctx: actx ? actx.state : null, t: actx ? actx.currentTime : 0, muted, loaded: Object.keys(SFX_BUF).sort(), playing: Object.keys(sfxSrc).sort(), names: SFX_NAMES.slice(), vol: { ...SFX_VOL }, rate: { ...SFX_RATE }, dur: Object.fromEntries(Object.entries(SFX_BUF).map(([k, b]) => [k, b.duration])) }),
-  sfxTap: () => { if (!sfxBus) return null; const a = actx.createAnalyser(); a.fftSize = 2048; sfxBus.connect(a); const d = new Float32Array(a.fftSize); return () => { a.getFloatTimeDomainData(d); let m = 0; for (const v of d) m = Math.max(m, Math.abs(v)); return m; }; },   // 回傳量峰值的函式（確認真的有聲音在跑）
+  sfxState: () => ({ ctx: actx ? actx.state : null, t: actx ? actx.currentTime : 0, muted, loaded: Object.keys(SFX_BUF).sort(), playing: Object.keys(sfxSrc).sort(), names: SFX_NAMES.slice(), vol: { ...SFX_VOL }, rate: { ...SFX_RATE }, gain: SFX_GAIN, comp: SFX_GAIN > 1 ? { ...SFX_COMP } : null, dur: Object.fromEntries(Object.entries(SFX_BUF).map(([k, b]) => [k, b.duration])) }),
+  sfxTap: () => { if (!sfxBus) return null; const a = actx.createAnalyser(); a.fftSize = 2048; (sfxComp || sfxBus).connect(a); const d = new Float32Array(a.fftSize); return () => { a.getFloatTimeDomainData(d); let m = 0; for (const v of d) m = Math.max(m, Math.abs(v)); return m; }; },   // 回傳量峰值的函式（確認真的有聲音在跑；接在壓縮器後面）
   sfx: (n, d) => sfx(n, d), muteBtn: () => ({ ...MUTE_BTN }), cssScale: () => cssScale, gameOver: why => gameOver(why),
+  // 測試／量測用：用 OfflineAudioContext 把音效照遊戲同一條路徑（SFX_VOL × G × 壓縮器）渲出來，回傳各音峰值與 16-bit PCM（base64）
+  sfxOffline: async ({ gain = SFX_GAIN, comp = (gain > 1 ? SFX_COMP : null), names = SFX_NAMES, gap = 0.4, pad = 0.25 } = {}) => {
+    const O = window.OfflineAudioContext || window.webkitOfflineAudioContext; if (!O) return { err: 'no-offline' };
+    const missing = names.filter(n => !SFX_BUF[n]); if (missing.length) return { err: 'missing', missing };
+    const sr = SFX_BUF[names[0]].sampleRate;
+    const durOf = n => SFX_BUF[n].duration / (SFX_RATE[n] || 1);
+    const hook = (ctx, g0, c0) => { const bus = ctx.createGain(); bus.gain.value = g0;
+      if (c0) { const c = ctx.createDynamicsCompressor(); c.threshold.value = c0.threshold; c.knee.value = c0.knee; c.ratio.value = c0.ratio; c.attack.value = c0.attack; c.release.value = c0.release; bus.connect(c); c.connect(ctx.destination); }
+      else bus.connect(ctx.destination); return bus; };
+    const peakOf = buf => { let m = 0; for (let ch = 0; ch < buf.numberOfChannels; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < d.length; i++) m = Math.max(m, Math.abs(d[i])); } return m; };
+    const rows = [];
+    for (const n of names) {
+      const oc = new O(2, Math.ceil((pad + durOf(n) + pad) * sr), sr); const bus = hook(oc, gain, comp);
+      const s = oc.createBufferSource(), g = oc.createGain(); s.buffer = SFX_BUF[n]; s.playbackRate.value = SFX_RATE[n] || 1; g.gain.value = SFX_VOL[n] || 1; s.connect(g); g.connect(bus); s.start(pad);
+      const out = await oc.startRendering(); const pk = peakOf(out); rows.push({ name: n, peak: pk, peak_dBFS: pk > 0 ? 20 * Math.log10(pk) : -Infinity, vol: SFX_VOL[n] || 1, rate: SFX_RATE[n] || 1, dur: durOf(n) });
+    }
+    let t = pad, total = pad; for (const n of names) { total += durOf(n) + gap; } total += pad;
+    const oc = new O(2, Math.ceil(total * sr), sr); const bus = hook(oc, gain, comp);
+    t = pad; for (const n of names) { const s = oc.createBufferSource(), g = oc.createGain(); s.buffer = SFX_BUF[n]; s.playbackRate.value = SFX_RATE[n] || 1; g.gain.value = SFX_VOL[n] || 1; s.connect(g); g.connect(bus); s.start(t); t += durOf(n) + gap; }
+    const seq = await oc.startRendering(); const L = seq.getChannelData(0), R = seq.numberOfChannels > 1 ? seq.getChannelData(1) : L;
+    const pcm = new Int16Array(L.length * 2); for (let i = 0; i < L.length; i++) { const a = Math.max(-1, Math.min(1, L[i])), b = Math.max(-1, Math.min(1, R[i])); pcm[i * 2] = a < 0 ? a * 0x8000 : a * 0x7fff; pcm[i * 2 + 1] = b < 0 ? b * 0x8000 : b * 0x7fff; }
+    let bin = '', u = new Uint8Array(pcm.buffer); for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+    return { sr, gain, comp, rows, seqPeak: peakOf(seq), seqPeak_dBFS: peakOf(seq) > 0 ? 20 * Math.log10(peakOf(seq)) : -Infinity, pcm16b64: btoa(bin), samples: L.length };
+  },
+
   C: { W, H, HUD_H, CEIL_Y, PW, PH, PLAT_W, PLAT_H, GAP, MAX_LIFE, START_LIFE, DMG, MOVE, GRAV, MAX_FALL, SCROLL0, SCROLL_STEP, SCROLL_MAX, CEIL_INVULN: HURT_INVULN, HURT_INVULN, CEIL_PUSH, ROW2_P, ROW2_GAP, SPRING_EVERY, SPRING_V, PLAT_W2, DRAGON_EVERY, DRAGON_T, D_TIN, DRAGON_ROW2_P, PREP_A, PREP_B, DT, AIR, MIN_OV, FIRE_MIN, FIRE_HURT_CAP, FIRE_KMIN, FIRE_MAX, D_EXIT, D_STAY, D_TURN, D_FLY, D_FLIP_DX, MILE_EVERY, BEST_KEY },
   state: () => ({ clock, mode, life, healDue, floors, invuln, overReason, seed, games, scroll: scrollSpeed(), dir: inputDir(), ptrs: ptrs.size, lastLand: lastLand ? lastLand.id : null, dragon: dragon && { n: dragon.n, side: dragon.side, t: clock - dragon.t0, tIn: dragon.tIn, K: dragon.ev.K, nb: dragon.nb }, leaving: leaving && { side: leaving.side, t: clock - leaving.t0 }, best, newRec, bestBefore, banner: banner && { n: banner.n, t: clock - banner.t0 }, mileDone, dragonLog: dragonLog.slice(), evLog: evLog.map(e => ({ ...e })), evK: dragon ? dragon.ev.K : 0, evFires: dragon ? dragon.ev.fires.length : null,
     player: player && { x: player.x, y: player.y, vy: player.vy, on: player.on ? player.on.id : null, onType: player.on ? player.on.type : null },
@@ -1384,7 +1418,7 @@ window.__stairs = {
   plan: id => { const X = plats.find(p => p.id === id); if (!X) return null; const rowAt = j => { const r = plats.filter(p => p.row === j); return r.length ? r : null; }; const pl = exitPlan(rowAt, X, X.row); if (pl) pl.landY = Math.min(...rowAt(pl.j).map(p => p.y)); return pl; },
   // 測試用：擺一個指定場景。plats: [{x,y,type}]，玩家放在 (px,py)
   setup: ({ plats: ps, px, py, life: l, floors: f }) => {
-    newGame(1); lastLand = null; plats = ps.map((p, i) => ({ x: p.x, w: p.w || PLAT_W, y: p.y, py: p.y, type: p.type, id: 1000 + i, row: p.row !== undefined ? p.row : (f || 0) + 1 + i, visited: false }));
+    newGame(1); lastLand = null; plats = ps.map((p, i) => ({ x: p.x, w: p.w || PLAT_W, y: p.y, py: p.y, type: p.type, id: 1000 + i, row: p.row !== undefined ? p.row : (f || 0) + 1 + i, visited: false, lit: p.lit ? (p.lit === true ? clock : p.lit) : 0, igniteAt: p.igniteIn !== undefined ? clock + p.igniteIn : (p.igniteAt || 0) }));
     const sr = {}; for (const p of plats) { p.src = { x: p.x, w: p.w, type: p.type }; (sr[p.row] = sr[p.row] || []).push(p.src); }
     for (const r in sr) gen.rows[r] = sr[r].sort((a, b) => a.x - b.x);   // 場景的排也放進生成器（吐火挑平台、檢查有沒有路要用）
     lastY = 1e9; player = { x: px, y: py, vy: 0, on: null, ignore: null };
