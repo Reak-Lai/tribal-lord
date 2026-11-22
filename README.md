@@ -1,4 +1,4 @@
-# 阿斑下樓梯 Banban v1.7.4
+# 阿斑下樓梯 Banban v1.7.5
 
 ## ▶ [點這裡玩](https://reak-lai.github.io/tribal-lord/)
 
@@ -7,6 +7,10 @@
 - 直接打開 `index.html` 就能玩（單一檔案）。
 - 原始碼在 `src/`，用 `node build.js` 合成 `index.html`。
 - 部落領主 demo 測試 v01_b 備份在分支 `backup/tribal-lord-v01b`。
+
+## v1.7.5 更新內容
+
+- 生命值從 5 顆心改成 3 顆（開局 3 顆、最多 3 顆）。扣血、回血規則不變：釘板、火焰平台、頂刺各扣 1 顆；受傷後踩到安全平台回 1 顆，補滿為止。
 
 ## v1.7.4 更新內容
 
